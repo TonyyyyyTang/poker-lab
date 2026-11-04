@@ -52,7 +52,22 @@
       const active = !state.complete && state.current_actor === p.id;
       const style = p.id === 0 ? '你的座位' : styleNames[p.style] || p.style || '今晚的牌友';
       const avatarColor = /^#[0-9a-f]{3,8}$/i.test(p.color || '') ? p.color : ['#677b61','#a18b6c','#778b88','#b79175','#84936d','#9c827a'][p.id];
-      return `<div class="seat seat-${p.id} ${!p.in_hand ? 'folded' : ''} ${active ? 'active' : ''} ${p.all_in ? 'all-in' : ''}"><div class="seat-person"><span class="avatar" style="--avatar-color:${avatarColor}">${esc(p.avatar || p.name.slice(0, 1))}</span><div class="seat-details"><div class="seat-name">${esc(p.name)}${p.id === 0 && p.name !== '你' ? ' <span style="font-size:8px;color:#939c87">你</span>' : ''}</div><div class="seat-stack">${bb(p.stack)}<small>BB</small></div></div><span class="seat-position">${state.dealer === p.id ? 'D' : esc(p.position || '')}</span></div><div class="seat-style">${esc(style)}</div><div class="seat-cards">${cards(p.cards)}</div><div class="seat-action">${p.all_in ? 'ALL IN' : active ? '思考中…' : esc(p.last_action || '已入座')}</div></div>${p.bet > 0 && !state.complete ? `<div class="bet-chip bet-${p.id}">${bb(p.bet)}</div>` : ''}`;
+      return [
+        `<div class="seat seat-${p.id} ${!p.in_hand ? 'folded' : ''} ${active ? 'active' : ''} ${p.all_in ? 'all-in' : ''}">`,
+        '<div class="seat-person">',
+        `<span class="avatar" style="--avatar-color:${avatarColor}">${esc(p.avatar || p.name.slice(0, 1))}</span>`,
+        '<div class="seat-details">',
+        `<div class="seat-name">${esc(p.name)}${p.id === 0 && p.name !== '你' ? ' <span style="font-size:8px;color:#939c87">你</span>' : ''}</div>`,
+        `<div class="seat-stack">${bb(p.stack)}<small>BB</small></div>`,
+        '</div>',
+        `<span class="seat-position">${state.dealer === p.id ? 'D' : esc(p.position || '')}</span>`,
+        '</div>',
+        `<div class="seat-style">${esc(style)}</div>`,
+        `<div class="seat-cards">${cards(p.cards)}</div>`,
+        `<div class="seat-action">${p.all_in ? 'ALL IN' : active ? '思考中…' : esc(p.last_action || '已入座')}</div>`,
+        '</div>',
+        p.bet > 0 && !state.complete ? `<div class="bet-chip bet-${p.id}">${bb(p.bet)}</div>` : '',
+      ].join('');
     }).join('');
     const list = $('activity-list'); const wasBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 60;
     let previousStreet = '';
@@ -68,7 +83,19 @@
     if (!state) return;
     const panel = $('action-panel');
     if (state.complete) {
-      panel.innerHTML = `<div class="hand-end"><div class="hand-end-copy"><p class="eyebrow">ONE MORE HAND?</p><h3>${esc(state.summary || '这一手结束了。')}</h3><p>筹码留在桌上，庄家向前一位。</p></div><div class="hand-end-actions"><button class="secondary-button" id="review-hand" ${busy ? 'disabled' : ''}>复盘这手</button><button class="primary-button" id="next-hand" ${busy ? 'disabled' : ''}>下一手 <span aria-hidden="true">→</span></button></div></div>`;
+      panel.innerHTML = [
+        '<div class="hand-end">',
+        '<div class="hand-end-copy">',
+        '<p class="eyebrow">ONE MORE HAND?</p>',
+        `<h3>${esc(state.summary || '这一手结束了。')}</h3>`,
+        '<p>筹码留在桌上，庄家向前一位。</p>',
+        '</div>',
+        '<div class="hand-end-actions">',
+        `<button class="secondary-button" id="review-hand" ${busy ? 'disabled' : ''}>复盘这手</button>`,
+        `<button class="primary-button" id="next-hand" ${busy ? 'disabled' : ''}>下一手 <span aria-hidden="true">→</span></button>`,
+        '</div>',
+        '</div>',
+      ].join('');
       $('review-hand').onclick = () => openHistory(state.hand_id);
       $('next-hand').onclick = () => transition('/api/next', {version: state.version});
       return;
@@ -82,7 +109,38 @@
     if (amountVersion !== state.version) { amount = min; amountVersion = state.version; }
     amount = Math.max(min, Math.min(max, Number(amount) || min));
     const hero = state.players.find((p) => p.id === 0), canRaise = legal.can_raise && max > 0;
-    panel.innerHTML = `<div class="action-heading"><strong>轮到你了</strong><small>${hero && hero.position ? esc(hero.position) + ' · ' : ''}${legal.can_check ? '可以免费看下一步' : `跟注需 ${bb(legal.call_amount)} BB`}</small></div>${canRaise ? `<div class="sizing"><label for="raise-slider">加注到</label><input id="raise-slider" aria-label="加注到多少筹码" type="range" min="${min}" max="${max}" value="${amount}" step="1" ${busy ? 'disabled' : ''}><div class="amount-input"><input id="raise-amount" type="number" aria-label="加注到多少 BB" min="${min / 2}" max="${max / 2}" step="0.5" value="${amount / 2}" ${busy ? 'disabled' : ''}><span>BB</span></div><div class="sizing-presets"><button type="button" data-size="half" ${busy ? 'disabled' : ''}>½ 底池</button><button type="button" data-size="pot" ${busy ? 'disabled' : ''}>底池</button><button type="button" data-size="all" ${busy ? 'disabled' : ''}>ALL IN</button></div></div>` : ''}<div class="action-buttons"><button class="action-button" id="fold-action" ${busy || !legal.can_fold ? 'disabled' : ''}>弃牌</button><button class="action-button call" id="call-action" ${busy || (!legal.can_check && !legal.call_amount) ? 'disabled' : ''}>${legal.can_check ? '过牌' : '跟注'}${!legal.can_check ? `<span>${bb(legal.call_amount)} BB</span>` : ''}</button><button class="action-button raise" id="raise-action" ${busy || !canRaise ? 'disabled' : ''}>${amount === max && canRaise ? '全下' : '加注到'}<span id="raise-label">${canRaise ? bb(amount) + ' BB' : '暂不可加注'}</span></button></div>`;
+    const disabled = busy ? 'disabled' : '';
+    const sizing = [
+      '<div class="sizing">',
+      '<label for="raise-slider">加注到</label>',
+      `<input id="raise-slider" aria-label="加注到多少筹码" type="range" min="${min}" max="${max}" value="${amount}" step="1" ${disabled}>`,
+      '<div class="amount-input">',
+      `<input id="raise-amount" type="number" aria-label="加注到多少 BB" min="${min / 2}" max="${max / 2}" step="0.5" value="${amount / 2}" ${disabled}>`,
+      '<span>BB</span>',
+      '</div>',
+      '<div class="sizing-presets">',
+      `<button type="button" data-size="half" ${disabled}>½ 底池</button>`,
+      `<button type="button" data-size="pot" ${disabled}>底池</button>`,
+      `<button type="button" data-size="all" ${disabled}>ALL IN</button>`,
+      '</div>',
+      '</div>',
+    ].join('');
+    panel.innerHTML = [
+      '<div class="action-heading">',
+      '<strong>轮到你了</strong>',
+      `<small>${hero && hero.position ? esc(hero.position) + ' · ' : ''}${legal.can_check ? '可以免费看下一步' : `跟注需 ${bb(legal.call_amount)} BB`}</small>`,
+      '</div>',
+      canRaise ? sizing : '',
+      '<div class="action-buttons">',
+      `<button class="action-button" id="fold-action" ${busy || !legal.can_fold ? 'disabled' : ''}>弃牌</button>`,
+      `<button class="action-button call" id="call-action" ${busy || (!legal.can_check && !legal.call_amount) ? 'disabled' : ''}>`,
+      `${legal.can_check ? '过牌' : '跟注'}${!legal.can_check ? `<span>${bb(legal.call_amount)} BB</span>` : ''}`,
+      '</button>',
+      `<button class="action-button raise" id="raise-action" ${busy || !canRaise ? 'disabled' : ''}>`,
+      `${amount === max && canRaise ? '全下' : '加注到'}<span id="raise-label">${canRaise ? bb(amount) + ' BB' : '暂不可加注'}</span>`,
+      '</button>',
+      '</div>',
+    ].join('');
     $('fold-action').onclick = () => transition('/api/action', {version: state.version, action: 'fold'});
     $('call-action').onclick = () => transition('/api/action', {version: state.version, action: 'check_call'});
     $('raise-action').onclick = () => transition('/api/action', {version: state.version, action: 'raise', amount: Math.round(amount)});
@@ -105,7 +163,21 @@
       else {
         const data = await api('/api/history'); replay = null;
         const hands = data.hands || [];
-        $('history-content').innerHTML = hands.length ? hands.map((hand) => `<button class="history-hand" data-hand="${hand.hand_id}"><span class="hand-number">${String(hand.hand_id).padStart(2, '0')}</span><span class="hand-copy"><strong>${esc(hand.summary || '完整手牌记录')}</strong><small>${(hand.board || []).map(esc).join(' · ') || '翻牌前结束'} · 点击逐步回看</small></span><span class="hand-net ${hand.net > 0 ? 'positive' : hand.net < 0 ? 'negative' : ''}">${signed(hand.net)} <small style="font:9px var(--sans)">BB</small></span></button>`).join('') : '<div class="history-empty">还没有打完的手牌。<br>打完第一手，再来看看每一步。</div>';
+        const handRow = (hand) => [
+          `<button class="history-hand" data-hand="${hand.hand_id}">`,
+          `<span class="hand-number">${String(hand.hand_id).padStart(2, '0')}</span>`,
+          '<span class="hand-copy">',
+          `<strong>${esc(hand.summary || '完整手牌记录')}</strong>`,
+          `<small>${(hand.board || []).map(esc).join(' · ') || '翻牌前结束'} · 点击逐步回看</small>`,
+          '</span>',
+          `<span class="hand-net ${hand.net > 0 ? 'positive' : hand.net < 0 ? 'negative' : ''}">`,
+          `${signed(hand.net)} <small style="font:9px var(--sans)">BB</small>`,
+          '</span>',
+          '</button>',
+        ].join('');
+        $('history-content').innerHTML = hands.length
+          ? hands.map(handRow).join('')
+          : '<div class="history-empty">还没有打完的手牌。<br>打完第一手，再来看看每一步。</div>';
         $('history-content').querySelectorAll('[data-hand]').forEach((button) => { button.onclick = () => openHistory(Number(button.dataset.hand)); });
       }
     } catch (error) { $('history-content').innerHTML = `<div class="history-empty">${esc(error.message)}<br><button id="retry-history" class="secondary-button">重试</button></div>`; $('retry-history').onclick = () => openHistory(handId); }
@@ -114,7 +186,38 @@
     const frames = replay.frames || [], frame = frames[replayIndex];
     if (!frame) { $('history-content').innerHTML = '<div class="history-empty">这手暂时没有可用的回放。</div>'; return; }
     const lastAction = frame.actions?.at(-1), last = replayIndex === frames.length - 1;
-    $('history-content').innerHTML = `<button class="replay-back" id="back-history">← 所有手牌</button><div class="replay-heading"><h3>第 ${replay.hand_id} 手</h3><span>第 ${replayIndex + 1} / ${frames.length} 步</span></div><div class="replay-board"><div class="replay-board-label">${esc(streets[frame.street] || '发牌')} ${frame.complete ? '· 已结束' : ''}</div><div class="board">${cards(frame.board, 5, true)}</div><div class="replay-pot">${bb(frame.pot)} <small style="font:9px var(--sans)">BB 底池</small></div></div><div class="replay-controls"><button id="replay-prev" aria-label="上一步" ${replayIndex === 0 ? 'disabled' : ''}>←</button><input type="range" id="replay-slider" min="0" max="${frames.length - 1}" value="${replayIndex}" step="1" aria-label="回放进度"><button id="replay-next" aria-label="下一步" ${last ? 'disabled' : ''}>→</button></div><div class="replay-event">${esc(frame.complete ? frame.summary || replay.summary : lastAction?.text || '六位朋友入座，盲注就位。')}</div><div class="replay-players">${(frame.players || []).map((p) => `<div class="replay-player ${!p.in_hand ? 'folded' : ''}"><div><div class="replay-player-name">${esc(p.name)}${p.id === 0 && p.name !== '你' ? ' · 你' : ''}</div><div class="replay-player-stack">${bb(p.stack)} BB ${p.all_in ? '· ALL IN' : ''}</div></div><div class="replay-cards">${cards(p.cards)}</div></div>`).join('')}</div><div class="review-notes"><h4>这一手的观察</h4>${(replay.notes || []).map((note) => `<p>${esc(typeof note === 'string' ? note : note.text || '')}</p>`).join('') || '<p>回到当时的公共牌和下注过程，想想你给对手的范围。结果只是这一手的结尾。</p>'}</div><p class="replay-disclaimer">回放保留每一步当时可见的信息；未公开的底牌仍然盖着。这里的观察用于复盘，不是最优策略评分。</p>`;
+    const playerRow = (p) => [
+      `<div class="replay-player ${!p.in_hand ? 'folded' : ''}">`,
+      '<div>',
+      `<div class="replay-player-name">${esc(p.name)}${p.id === 0 && p.name !== '你' ? ' · 你' : ''}</div>`,
+      `<div class="replay-player-stack">${bb(p.stack)} BB ${p.all_in ? '· ALL IN' : ''}</div>`,
+      '</div>',
+      `<div class="replay-cards">${cards(p.cards)}</div>`,
+      '</div>',
+    ].join('');
+    const notes = (replay.notes || []).map((note) => `<p>${esc(typeof note === 'string' ? note : note.text || '')}</p>`).join('')
+      || '<p>回到当时的公共牌和下注过程，想想你给对手的范围。结果只是这一手的结尾。</p>';
+    $('history-content').innerHTML = [
+      '<button class="replay-back" id="back-history">← 所有手牌</button>',
+      '<div class="replay-heading">',
+      `<h3>第 ${replay.hand_id} 手</h3>`,
+      `<span>第 ${replayIndex + 1} / ${frames.length} 步</span>`,
+      '</div>',
+      '<div class="replay-board">',
+      `<div class="replay-board-label">${esc(streets[frame.street] || '发牌')} ${frame.complete ? '· 已结束' : ''}</div>`,
+      `<div class="board">${cards(frame.board, 5, true)}</div>`,
+      `<div class="replay-pot">${bb(frame.pot)} <small style="font:9px var(--sans)">BB 底池</small></div>`,
+      '</div>',
+      '<div class="replay-controls">',
+      `<button id="replay-prev" aria-label="上一步" ${replayIndex === 0 ? 'disabled' : ''}>←</button>`,
+      `<input type="range" id="replay-slider" min="0" max="${frames.length - 1}" value="${replayIndex}" step="1" aria-label="回放进度">`,
+      `<button id="replay-next" aria-label="下一步" ${last ? 'disabled' : ''}>→</button>`,
+      '</div>',
+      `<div class="replay-event">${esc(frame.complete ? frame.summary || replay.summary : lastAction?.text || '六位朋友入座，盲注就位。')}</div>`,
+      `<div class="replay-players">${(frame.players || []).map(playerRow).join('')}</div>`,
+      `<div class="review-notes"><h4>这一手的观察</h4>${notes}</div>`,
+      '<p class="replay-disclaimer">回放保留每一步当时可见的信息；未公开的底牌仍然盖着。这里的观察用于复盘，不是最优策略评分。</p>',
+    ].join('');
     $('back-history').onclick = () => openHistory();
     $('replay-prev').onclick = () => { replayIndex = Math.max(0, replayIndex - 1); renderReplay(); };
     $('replay-next').onclick = () => { replayIndex = Math.min(frames.length - 1, replayIndex + 1); renderReplay(); };
