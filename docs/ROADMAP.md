@@ -16,7 +16,7 @@ Goal: a website where anyone can play the bots from a link, friends can share a 
 | Phase | Outcome | Owner | Status |
 |---|---|---|---|
 | 0. Public solo table | The current game at a public HTTPS link | Codex | Live at https://poker-lab.onrender.com |
-| 1. Server-driven tables | The server runs bot turns and timers; each seat gets its own view; one table can seat several humans | Codex | Not started |
+| 1. Server-driven tables | The server runs bot turns and timers; each seat gets its own view; one table can seat several humans | Codex (backend), Claude (client) | Spec: `docs/tasks/server-driven-tables.md` |
 | 2. Invite rooms | "Create table" returns a link; friends join with a name; empty seats are bots; live updates over WebSocket; turn timer, sit out, rejoin | Codex (backend), Claude (lobby and seat UI) | Not started |
 | 3. Adaptive bots | Bots keep per-opponent statistics from public observations, with Bayesian shrinkage, and shift bluffing, value sizing and calling thresholds; personality sets how fast they adapt | Claude | Done; see `poker_lab/opponents.py` |
 | 4. Decision review | Replay shows equity against an estimated range with its standard error, breakeven equity, call/fold EV under a stated simplification, and all-in-adjusted results | Claude | Not started |
