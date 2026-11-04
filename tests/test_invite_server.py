@@ -51,7 +51,7 @@ class InviteServerTests(unittest.TestCase):
 
     def shared(self):
         sid, _ = self.solo()
-        status, view, _ = self.request("POST", "/api/tables", sid=sid)
+        status, view, _ = self.request("POST", "/api/tables", {"name": "Host"}, sid=sid)
         self.assertEqual(status, 200)
         return sid, view, server.TABLES[server.SESSIONS[sid].table_id]
 
@@ -77,7 +77,7 @@ class InviteServerTests(unittest.TestCase):
         sid, solo = self.solo()
         old_id = server.SESSIONS[sid].table_id
         old = server.TABLES[old_id]
-        status, view, _ = self.request("POST", "/api/tables", sid=sid)
+        status, view, _ = self.request("POST", "/api/tables", {"name": "  Host  "}, sid=sid)
         self.assertEqual(status, 200)
         table_id = server.SESSIONS[sid].table_id
         self.assertNotEqual(table_id, old_id)
@@ -91,6 +91,7 @@ class InviteServerTests(unittest.TestCase):
         self.assertNotEqual(view["table"]["invite"], table_id)
         self.assertGreater(view["version"], solo["version"])
         self.assertEqual(view["you"], 0)
+        self.assertEqual(view["players"][0]["name"], "Host")
         self.assertFalse(view["pending"])
         self.assertIsNone(view["turn_remaining"])
         self.assertIsNone(view["next_hand_in"])
@@ -174,6 +175,48 @@ class InviteServerTests(unittest.TestCase):
             view = self.request("GET", "/api/state", sid=sid)[1]
             expected = "abcdefghijkl" + (f" {seat}" if seat > 1 else "")
             self.assertEqual(view["players"][seat]["name"], expected)
+
+    def test_creator_name_is_required_and_validated_before_replacing_binding(self):
+        sid, solo = self.solo()
+        binding = server.SESSIONS[sid]
+        for name in (None, 123, [], "", "   ", "abcdefghijklm", "A\x00B", "A\nB", "A\x7fB", "A\x85B"):
+            for cookie in (None, sid):
+                with self.subTest(name=name, cookie=cookie):
+                    status, _, headers = self.request("POST", "/api/tables", {"name": name}, sid=cookie)
+                    self.assertEqual(status, 400)
+                    self.assertNotIn("Set-Cookie", headers)
+                    self.assertEqual(len(server.SESSIONS), 1)
+                    self.assertEqual(len(server.TABLES), 1)
+                    self.assertIs(server.SESSIONS[sid], binding)
+                    self.assertEqual(self.request("GET", "/api/state", sid=sid)[1], solo)
+        status, shared, _ = self.request("POST", "/api/tables", {"name": "  abcdefghijkl  "}, sid=sid)
+        self.assertEqual(status, 200)
+        self.assertEqual(shared["players"][0]["name"], "abcdefghijkl")
+        guest, _ = self.join(shared["table"]["invite"], "abcdefghijkl")
+        table = server.TABLES[server.SESSIONS[sid].table_id]
+        self.next_hand(sid, table)
+        self.assertEqual(self.request("GET", "/api/state", sid=guest)[1]["players"][1]["name"], "abcdefghijkl 2")
+
+    def test_metadata_changes_do_not_invalidate_current_decision(self):
+        host, shared, table = self.shared()
+        guest, _ = self.join(shared["table"]["invite"])
+        self.next_hand(host, table)
+        previous_decision = table.version
+        while table.actor != 0:
+            table.act(table.actor, "check_call")
+        version, deadline = table.version, table.next_due()
+        self.assertEqual(self.request("POST", "/api/back", sid=guest)[0], 200)
+        self.join(shared["table"]["invite"], "Third")
+        self.assertEqual(self.request("POST", "/api/leave", sid=guest)[0], 200)
+        self.assertGreater(table.version, version)
+        self.assertEqual(table.next_due(), deadline)
+        for invalid in (previous_decision, table.version + 1, True, "1", None):
+            before = table.view(0)
+            self.assertEqual(self.request("POST", "/api/action", {"version": invalid, "action": "check_call"}, sid=host)[0], 409)
+            self.assertEqual(table.view(0), before)
+        payload = {"version": version, "action": "check_call"}
+        self.assertEqual(self.request("POST", "/api/action", payload, sid=host)[0], 200)
+        self.assertEqual(self.request("POST", "/api/action", payload, sid=host)[0], 409)
 
     def test_unknown_code_full_table_and_idempotent_join_at_capacity(self):
         host, initial, table = self.shared()
@@ -310,7 +353,7 @@ class InviteServerTests(unittest.TestCase):
             with self.subTest(endpoint=endpoint):
                 host, initial, table = self.shared()
                 guest, pending = self.join(initial["table"]["invite"])
-                status, replacement, _ = self.request("POST", endpoint, sid=guest)
+                status, replacement, _ = self.request("POST", endpoint, {"name": "New host"}, sid=guest)
                 self.assertEqual(status, 200)
                 self.assertGreater(replacement["version"], pending["version"])
                 self.assertIs(server.TABLES[server.SESSIONS[host].table_id], table)

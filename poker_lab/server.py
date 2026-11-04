@@ -158,13 +158,15 @@ def bind_session(sid, path, payload):
                     return 200, target.view(seat), cookie
             options = {"version": source.version if source else 0}
             if path == "/api/tables":
+                try:
+                    name = guest_name(payload.get("name"))
+                except ValueError as exc:
+                    return 400, {"error": str(exc)}, None
                 invite = secrets.token_urlsafe(8)
                 while invite in TABLES or any(t.invite == invite for t in TABLES.values()):
                     invite = secrets.token_urlsafe(8)
                 players = deepcopy(PLAYERS)
-                if source:
-                    player = source.pending.get(session.seat, source.players[session.seat])
-                    players[0].update(name=player["name"], avatar=player["name"][0])
+                players[0].update(name=name, avatar=name[0])
                 options.update(shared=True, invite=invite, players=players)
             fresh = Table(**options)
             cookie = None if session else secrets.token_urlsafe(32)
@@ -364,11 +366,13 @@ class Handler(BaseHTTPRequestHandler):
                         table.back(session.seat)
                     else:
                         version = payload.get("version")
-                        if type(version) is not int or version != table.version:
+                        if type(version) is not int:
                             raise ValueError("牌局已更新，请重试当前操作。")
                         if path == "/api/action":
                             table.act(session.seat, payload.get("action"), payload.get("amount"), version)
                         else:
+                            if version != table.version:
+                                raise ValueError("牌局已更新，请重试当前操作。")
                             table.new_hand()
                     status, body = 200, table.view(session.seat)
                 except ValueError as exc:

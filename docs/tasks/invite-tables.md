@@ -17,9 +17,11 @@ From the solo table, a player creates a shared table and gets a link. Friends op
 
 ### 1. Shared tables
 
-- `POST /api/tables` creates a shared table with the caller in seat 0 and bots in seats 1–5, using the existing bot names and styles. It replaces the caller's current binding (a solo table with no other session is dropped, as with reset).
+- `POST /api/tables` with `{name}` creates a shared table with the caller in seat 0 under that guest name and bots in seats 1–5, using the existing bot names and styles. The name is required and validated exactly like `/api/join`: trim, require 1–12 characters, reject control characters. Invalid names return 400 without changing the current binding. It replaces the caller's current binding (a solo table with no other session is dropped, as with reset).
 - Each shared table has an invite code: `secrets.token_urlsafe(8)`, unguessable, distinct from the internal table id.
 - Shared tables use `turn_seconds = 30` and deal the next hand automatically `AUTO_DEAL_SECONDS = 5` after a hand ends; any seated human may deal sooner with `POST /api/next`. Solo tables keep no timer and manual dealing.
+- When no human is active (every seated human is away or leaving, with no pending joiners), pause scheduled play, human timers and automatic dealing. Returning with `/api/back` or a valid action resumes play. A pending join also resumes scheduling so the newcomer can reach the next deal. Resumption starts a fresh deadline; unrelated join/leave/back events do not extend an existing turn.
+- Actions retain the existing `{version, action, amount?}` payload. Accept a version from the start of the current decision through the current table version: join/leave/back notifications do not invalidate a still-current action. A completed action or new deal starts a new decision boundary; earlier, future and replayed action versions are rejected. `/api/next` still requires the current version.
 
 ### 2. Joining
 

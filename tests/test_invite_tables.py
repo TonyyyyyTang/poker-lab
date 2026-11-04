@@ -293,8 +293,10 @@ class InviteTableTests(unittest.TestCase):
             self.finish(table)
             table.new_hand()
         self.to_actor(table, 0)
-        self.assertEqual(table.next_due(), self.clock.now)
+        self.assertIsNone(table.next_due())
         table.leave(0)
+        self.assertIsNone(table.next_due())
+        table.join("Guest")  # A pending guest keeps the table running until seated.
         self.assertTrue(table.run_due())
         self.finish(table)
         table.new_hand()
@@ -305,6 +307,113 @@ class InviteTableTests(unittest.TestCase):
         self.assertFalse(table.players[0]["leaving"])
         self.assertEqual(table.start_stacks[0], 200)
         self.assertEqual(table.join("New owner"), 0)
+
+    def test_unattended_table_stops_for_an_hour_then_back_resumes(self):
+        table = self.table()
+        with patch("poker_lab.bots.choose_action", return_value={"action": "check_call"}):
+            for _ in range(200):
+                if table.next_due() is None:
+                    break
+                self.timeout(table)
+            else:
+                self.fail("An unattended table kept dealing after its host became away")
+            self.assertTrue(table.players[0]["away"])
+            self.assertEqual(table.timeouts[0], 2)
+            self.assertEqual(table.hand_id, 2)
+            before = (table.hand_id, table.version, list(table.state.stacks), deepcopy(table.actions))
+            self.clock.now += 3600
+            self.assertFalse(table.run_due())
+            self.assertEqual((table.hand_id, table.version, list(table.state.stacks), table.actions), before)
+            self.assertIsNone(table.view(0)["turn_remaining"])
+            self.assertIsNone(table.view(0)["next_hand_in"])
+            table.back(0)
+            self.assertFalse(table.players[0]["away"])
+            self.assertIsNotNone(table.next_due())
+            while table.state.status:
+                self.timeout(table)
+            self.assertEqual(table.view(0)["next_hand_in"], AUTO_DEAL_SECONDS)
+            self.timeout(table)
+            self.assertEqual(table.hand_id, 3)
+
+    def test_unattended_hand_end_pauses_deal_and_return_restarts_countdown(self):
+        table = self.table()
+        guest = self.join_and_deal(table)
+        table.players[0]["away"] = True
+        self.finish(table)
+        # Completing a hand normally does not bring an already-folded away player back.
+        table.players[0]["away"] = True
+        self.assertEqual(table.view(guest)["next_hand_in"], 5)
+        self.clock.now += 2
+        table.leave(guest)
+        self.assertIsNone(table.next_due())
+        self.assertIsNone(table.view(0)["next_hand_in"])
+        self.clock.now += 3600
+        self.assertFalse(table.run_due())
+        table.back(0)
+        self.assertEqual(table.view(0)["next_hand_in"], 5)
+        self.clock.now += 4
+        self.assertFalse(table.run_due())
+        self.clock.now += 1
+        self.assertTrue(table.run_due())
+
+    def test_pending_join_resumes_unattended_table_without_private_cards(self):
+        table = self.table()
+        table.players[0]["away"] = True
+        with table.changed:
+            table._schedule_next()
+        self.assertIsNone(table.next_due())
+        guest = table.join("Present")
+        self.assertIsNotNone(table.next_due())
+        self.assertTrue(table.view(guest)["pending"])
+        self.assertEqual(table.view(guest)["players"][guest]["cards"], [])
+        with patch("poker_lab.bots.choose_action", return_value={"action": "check_call"}):
+            while table.state.status:
+                self.timeout(table)
+            self.timeout(table)
+        self.assertFalse(table.view(guest)["pending"])
+        self.assertEqual(table.players[guest]["kind"], "human")
+        self.assertEqual(table.start_stacks[guest], 200)
+        table.leave(guest)
+        self.assertIsNone(table.next_due())
+
+    def test_only_valid_action_resumes_unattended_current_decision(self):
+        table = self.table()
+        self.to_actor(table, 0)
+        table.players[0]["away"] = True
+        with table.changed:
+            table._schedule_next()
+        version = table.version
+        self.assertIsNone(table.view(0)["turn_remaining"])
+        with self.assertRaises(ValueError):
+            table.act(0, "raise", 0, version)
+        self.assertTrue(table.players[0]["away"])
+        self.assertIsNone(table.next_due())
+        table.act(0, "check_call", version=version)
+        self.assertFalse(table.players[0]["away"])
+        self.assertIsNotNone(table.next_due())
+
+    def test_metadata_updates_preserve_action_version_but_not_old_decisions(self):
+        players = deepcopy(PLAYERS)
+        players[3].update(kind="human", name="Other")
+        table = self.table(players=players)
+        self.to_actor(table, 0)
+        version, deadline = table.version, table.next_due()
+        table.join("Pending")
+        table.leave(3)
+        table.back(0)
+        self.assertGreater(table.version, version)
+        self.assertEqual(table.next_due(), deadline)
+        table.act(0, "check_call", version=version)
+        self.to_actor(table, 0)
+        before = table.view(0)
+        for stale in (version, table.version + 1, True):
+            with self.subTest(version=stale):
+                with self.assertRaises(ValueError):
+                    table.act(0, "check_call", version=stale)
+                self.assertEqual(table.view(0), before)
+        version = table.version
+        table.back(0)
+        table.act(0, "check_call", version=version)
 
 
 if __name__ == "__main__":

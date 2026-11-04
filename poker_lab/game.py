@@ -96,6 +96,12 @@ class Table:
         self.changed.notify_all()
         self.wake()
 
+    def _unattended(self):
+        # Pending guests are present and need this hand to finish before taking a seat.
+        return self.shared and not self.pending and not any(
+            p["kind"] == "human" and not p["away"] and not p["leaving"]
+            for p in self.players)
+
     def join(self, name):
         """Reserve a bot seat; its current hand still belongs to the bot."""
         with self.changed:
@@ -115,7 +121,10 @@ class Table:
             player.update(kind="human", name=name, style="", avatar=name[0], away=False, leaving=False)
             self.pending[seat] = player
             self.version += 1
-            self._notify()
+            if self.due_at is None:
+                self._schedule_next()
+            else:
+                self._notify()
             return seat
 
     def leave(self, seat):
@@ -127,7 +136,7 @@ class Table:
             else:
                 return
             self.version += 1
-            if seat == self.actor and self.players[seat]["leaving"]:
+            if self._unattended() or (seat == self.actor and self.players[seat]["leaving"]):
                 self._schedule_next()
             else:
                 self._notify()
@@ -140,7 +149,7 @@ class Table:
             self.players[seat]["away"] = False
             self.timeouts[seat] = 0
             self.version += 1
-            if was_away and seat == self.actor:
+            if self.due_at is None or (was_away and seat == self.actor):
                 self._schedule_next()
             else:
                 self._notify()
@@ -180,6 +189,7 @@ class Table:
                 rebuys.append(self.players[seat]["name"])
         self.hand_id += 1
         self.version += 1
+        self._decision_version = self.version
         self.dealer = (self.dealer + 1) % 6
         self.seats = [(self.dealer + 1 + i) % 6 for i in range(6)]
         self.indices = {seat: index for index, seat in enumerate(self.seats)}
@@ -328,7 +338,10 @@ class Table:
             return self.view(seat)
 
     def _act(self, seat, action, amount=None, version=None, automatic=False):
-        if version is not None and version != self.version:
+        # Seat metadata can change while the same decision remains on screen.
+        # Any version from this decision is valid; prior/future decisions are not.
+        if version is not None and (type(version) is not int
+                                    or not self._decision_version <= version <= self.version):
             raise ValueError("牌局已更新，请按当前局面操作。")
         if not self.state.status or seat != self.actor:
             raise ValueError("现在还没轮到这个座位。")
@@ -366,6 +379,7 @@ class Table:
                                  street=street, text=f"{self.players[seat]['name']} · {label}"))
         self.action_trace.append(dict(seat=seat, action=action, amount=amount))
         self.version += 1
+        self._decision_version = self.version
         self._collect_reveals(old_count)
         self._record()
         self._advance()
@@ -429,7 +443,7 @@ class Table:
     def _schedule_next(self):
         """Anchor the next deadline once per transition; inspecting it never delays play."""
         actor = self.actor
-        if self.closed:
+        if self.closed or self._unattended():
             delay = None
         elif actor is None:
             delay = AUTO_DEAL_SECONDS if self.shared and not self.state.status else None
