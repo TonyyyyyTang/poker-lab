@@ -8,6 +8,7 @@ import secrets
 from pokerkit import Automation as A, Deck, Mode, NoLimitTexasHoldem
 
 ENGINE_VERSION = "pokerkit-0.7.4/adapter-1"
+HAND_HISTORY_LIMIT = 20
 PLAYERS = [
     dict(name="你", style="", avatar="你", color="#b7874c"),
     dict(name="阿岚", style="tight", avatar="岚", color="#78988c"),
@@ -214,7 +215,7 @@ class Table:
             self.hands.append(dict(hand_id=self.hand_id, frames=deepcopy(self.frames),
                                    summary=self.summary, notes=notes,
                                    net=s.payoffs[self.indices[0]], board=self._board()))
-            self.hands = self.hands[-100:]
+            self.hands = self.hands[-HAND_HISTORY_LIMIT:]
             self._saved = True
 
     def _review_notes(self):

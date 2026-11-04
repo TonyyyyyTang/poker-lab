@@ -1,18 +1,18 @@
 # Architecture
 
-Status: first local implementation, 4 November 2026. The design below includes later extensions, identified as proposals.
+Status: local implementation with public solo hosting configuration prepared, 4 November 2026. The design below includes later extensions, identified as proposals.
 
 ## Implemented slice
 
 - `poker_lab/game.py`: PokerKit 0.7.4 adapter; fixed physical seats mapped to rotating engine positions; 2 integer units per BB; independently seeded dealing and policy streams; filtered seat observations; immutable public replay frames; recent hand history.
 - `poker_lab/bots.py`: three configured heuristic policies, using position, preflop selection, public aggression, approximate random-range showdown share and explicit biases. No external model calls.
-- `poker_lab/server.py`: standard-library HTTP server bound to loopback, opaque per-browser session cookies, versioned actions, serialised state changes, and an explicit static-file allowlist.
+- `poker_lab/server.py`: standard-library HTTP server bound to loopback by default, with `HOST`/`PORT` overrides for hosting, opaque per-browser session cookies (Secure behind HTTPS), versioned actions, serialised state changes, and an explicit static-file allowlist.
 - `web/`: native HTML, CSS and JavaScript for the six-seat table, actions and post-hand replay. No frontend toolchain is required.
 - `tests/`: adapter boundary tests and conditional policy comparisons.
 
-Sessions and the last 100 hands are held in process memory. Reloading a page resumes via its cookie; restarting the service clears them. No database or public hosting is used. Replay is visual history, not a branchable simulator yet. A deterministic seed and action trace exist inside each Table for verification, but are not sent through the public API.
+Sessions and each session's last 20 completed hands are held in process memory. The server keeps at most 100 sessions, evicting the least recently used when full. Sessions idle for more than two hours are removed on API requests or health checks. Reloading a page resumes via its cookie; restarting the service clears them. No database is used. Render's free-service configuration is prepared but has not been deployed. Replay is visual history, not a branchable simulator yet. A deterministic seed and action trace exist inside each Table for verification, but are not sent through the public API.
 
-PokerKit is MIT licensed and was selected after checking its documented full betting/settlement model. Its API is pinned and tested at 0.7.4. The default build serves one local user, not an internet-hardened multiplayer service.
+PokerKit is MIT licensed and was selected after checking its documented full betting/settlement model. Its API is pinned and tested at 0.7.4. Each browser session is a solo table; multiplayer is a later phase.
 
 ## Core flow
 

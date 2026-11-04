@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: poker-lab
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m poker_lab.server
+    healthCheckPath: /healthz
+    envVars:
+      - key: HOST
+        value: 0.0.0.0

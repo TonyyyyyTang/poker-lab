@@ -35,3 +35,11 @@ The owner creates the Render account, connects the GitHub repository, and approv
 ## Out of scope
 
 Multiplayer, WebSockets, persistence, accounts, rate limiting, custom domain, and any change to game rules, bots or the web UI.
+
+## Implementation handoff — 4 November 2026
+
+Implemented on `codex/public-solo-table`: environment binding, HTTP/HTTPS origin checks, proxy-aware Secure cookies, 20-hand history, 100-session LRU with two-hour idle expiry, `/healthz`, and Render free-service configuration pinned to Python 3.13.2. The 401 message now explains that reconnecting starts a fresh table; the existing web UI and JSON shapes are unchanged.
+
+Verification: all 29 unit tests pass on Python 3.13.2. Local browser checks on port 18765 passed for completing a hand, opening and advancing replay, and dealing the next hand. Restarting that test server with the page open produced the session-loss banner on the next action; **重新连接** cleared it and started hand 1 with fresh stacks. Default binding and environment/CLI overrides are covered by server-construction tests; the existing local server on port 8765 was left running.
+
+Pending owner steps: deployment, adding the public HTTPS URL, desktop/phone checks on that URL, and reconnect after a Render redeploy. No deployment or hosting credential access was performed.

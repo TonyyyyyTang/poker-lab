@@ -180,6 +180,19 @@ class TableTests(unittest.TestCase):
         self.assertIn("30.6%", notes)  # 19 / (20 + 20 + 20 + dead big blind 2)
         self.assertNotIn("8.6%", notes)
 
+    def test_history_keeps_latest_twenty_completed_hands(self):
+        table = Table(seed=8)
+        for hand_id in range(1, 26):
+            while table.state.status:
+                table.act(table.actor, "fold")
+            self.assertEqual([hand["hand_id"] for hand in table.hands],
+                             list(range(max(1, hand_id - 19), hand_id + 1)))
+            self.assertTrue(table.hands[-1]["frames"][-1]["complete"])
+            self.assert_conserved(table)
+            table.new_hand()
+        self.assertEqual(table.hand_id, 26)
+        self.assertEqual([hand["hand_id"] for hand in table.hands], list(range(6, 26)))
+
     def test_same_seed_and_actions_replay_exactly_with_isolated_policy_rng(self):
         first, second = Table(seed=912), Table(seed=912)
         rng = random.Random(9)
