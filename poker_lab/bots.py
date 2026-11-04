@@ -3,6 +3,10 @@
 Postflop samples are against uniformly random hands, not inferred ranges or an
 action-EV solver. They are a noisy policy signal; no playing-strength claim is
 implied. The caller owns the random stream, independently of dealing cards.
+
+Adaptation reads public opponent statistics (opponents.py). `trust` is the
+prior strength in hands, `adapt` scales every adjustment. With no data every
+adjustment is exactly zero, so a fresh table plays like friends-1.0.
 """
 
 from collections import Counter
@@ -10,7 +14,9 @@ from random import Random
 
 from pokerkit import StandardHighHand
 
-POLICY_VERSION = "friends-1.0"
+from .opponents import PRIORS, estimate
+
+POLICY_VERSION = "friends-1.1"
 EQUITY_SAMPLES = 32
 RANKS = "23456789TJQKA"
 DECK = tuple(rank + suit for rank in RANKS for suit in "cdhs")
@@ -20,16 +26,19 @@ PROFILES = {
         "entry": 0.48, "open_raise": 0.88, "call_margin": 0.10,
         "optimism": -0.035, "pair_attachment": 0.0,
         "value_raise": 0.70, "bluff": 0.055, "size": 0.65,
+        "trust": 12, "adapt": 1.0,
     },
     "calling": {
         "entry": 0.24, "open_raise": 0.12, "call_margin": -0.005,
         "optimism": 0.035, "pair_attachment": 0.16,
         "value_raise": 0.20, "bluff": 0.015, "size": 0.45,
+        "trust": 60, "adapt": 0.35,
     },
     "bold": {
         "entry": 0.32, "open_raise": 0.82, "call_margin": 0.015,
         "optimism": 0.105, "pair_attachment": 0.065,
         "value_raise": 0.88, "bluff": 0.23, "size": 0.85,
+        "trust": 30, "adapt": 0.7,
     },
 }
 
@@ -88,13 +97,27 @@ def _features(observation: dict) -> tuple[bool, bool]:
     return top_pair, len(board) < 5 and (flush_draw or straight_draw)
 
 
-def _raise(observation: dict, profile: dict, rng: Random, reason: str) -> dict:
+def _clamp(value: float, limit: float) -> float:
+    return max(-limit, min(limit, value))
+
+
+def _read(observation: dict, seat: int, stat: str, profile: dict) -> float:
+    return estimate(observation["reads"][seat][stat], stat, profile["trust"])
+
+
+def _last_raiser(observation: dict) -> int | None:
+    raisers = [e["player"] for e in observation["history"]
+               if e["kind"] == "raise" and e["street"] == observation["street"]]
+    return raisers[-1] if raisers else None
+
+
+def _raise(observation: dict, profile: dict, rng: Random, reason: str, size_scale: float) -> dict:
     legal = observation["legal"]
     current = observation["bet"] + legal["call_amount"]
     if observation["street"] == "preflop":
         target = max(3 * observation["big_blind"], current * (2.5 if current > observation["big_blind"] else 3))
     else:
-        fraction = profile["size"] * rng.uniform(0.85, 1.15)
+        fraction = profile["size"] * rng.uniform(0.85, 1.15) * size_scale
         target = current + (observation["pot"] + legal["call_amount"]) * fraction
     amount = max(legal["min_raise_to"], min(legal["max_raise_to"], round(target)))
     return {"action": "raise", "amount": int(amount), "reason": reason}
@@ -115,6 +138,11 @@ def choose_action(observation: dict, archetype: str, rng: Random) -> dict:
         pressure = min(0.34, 0.045 * max(0, price_bb - 1) ** 0.65)
         position = -0.055 if late else (0.035 if observation["position"] in {"UTG", "HJ"} else 0)
         threshold = profile["entry"] + position + pressure
+        # Defend wider against a loose raiser, tighter against a selective one.
+        raiser = _last_raiser(observation)
+        if raiser is not None:
+            pfr = _read(observation, raiser, "pfr", profile)
+            threshold -= _clamp(profile["adapt"] * 0.3 * (pfr - PRIORS["pfr"]), 0.06)
         playable = strength + rng.uniform(-0.045, 0.045) >= threshold
         if not playable and not free and legal["can_fold"]:
             return {"action": "fold", "reason": "这手牌不值得以当前价格入池"}
@@ -124,7 +152,7 @@ def choose_action(observation: dict, archetype: str, rng: Random) -> dict:
         if archetype == "calling" and strength > 0.83:
             raise_rate += 0.34
         if can_raise and playable and rng.random() < raise_rate:
-            return _raise(observation, profile, rng, "用主动下注争取位置与底池" if archetype == "bold" else "在自己的入池范围内下注")
+            return _raise(observation, profile, rng, "用主动下注争取位置与底池" if archetype == "bold" else "在自己的入池范围内下注", 1.0)
         return {"action": "check_call", "reason": "先看下一张牌" if archetype == "calling" else "控制投入，继续这手牌"}
 
     equity = _random_range_equity(observation, rng)
@@ -144,17 +172,32 @@ def choose_action(observation: dict, archetype: str, rng: Random) -> dict:
         perceived -= min(0.09, street_raises * 0.03)
     pot_odds = call / max(1, observation.get("eligible_pot_after_call", observation["pot"] + call))
     required = pot_odds + profile["call_margin"]
+    # Call lighter against bettors who are aggressive or have shown river bluffs.
+    raiser = _last_raiser(observation)
+    if raiser is not None:
+        aggression = _read(observation, raiser, "aggression", profile) - PRIORS["aggression"]
+        bluffing = _read(observation, raiser, "river_bluff", profile) - PRIORS["river_bluff"]
+        required -= _clamp(profile["adapt"] * (0.15 * aggression + 0.25 * bluffing), 0.08)
     if archetype == "tight" and call > observation["pot"] / 2:
         required += 0.055
     if not free and legal["can_fold"] and perceived < required:
         return {"action": "fold", "reason": "继续投入的价格超过了对这手牌的判断"}
 
+    # The stickiest opponent still in the hand decides how bets are received.
+    folded = {e["player"] for e in observation["history"] if e["kind"] == "fold"}
+    active = [seat for seat in observation["reads"] if seat != observation["seat"] and seat not in folded]
+    fold_rate = min(_read(observation, seat, "fold_to_bet", profile) for seat in active)
+    base = PRIORS["fold_to_bet"]
+    fold_odds = (fold_rate / (1 - fold_rate)) / (base / (1 - base))
+    bluff_scale = min(2.5, max(0.4, fold_odds ** profile["adapt"]))
+    size_scale = min(1.3, max(0.85, 1 + profile["adapt"] * 0.6 * (base - fold_rate)))
+
     multiway = max(1, observation["opponents"])
-    value_threshold = max(0.48, 1 / (multiway + 1) + 0.15)
+    value_threshold = max(0.48, 1 / (multiway + 1) + 0.15) + _clamp(profile["adapt"] * 0.3 * (fold_rate - base), 0.06)
     value_raise = perceived > value_threshold and rng.random() < profile["value_raise"]
     # Bluff more often with a draw, in position, and against fewer players.
-    bluff_rate = profile["bluff"] * (1.5 if draw else 0.45) * (1.2 if late else 0.8) / multiway
+    bluff_rate = profile["bluff"] * (1.5 if draw else 0.45) * (1.2 if late else 0.8) / multiway * bluff_scale
     bluff_raise = (free or call <= observation["pot"] / 3) and rng.random() < bluff_rate
     if can_raise and (value_raise or bluff_raise):
-        return _raise(observation, profile, rng, "借听牌向对手施压" if bluff_raise and draw else "下注争取价值或主动权")
+        return _raise(observation, profile, rng, "借听牌向对手施压" if bluff_raise and draw else "下注争取价值或主动权", size_scale)
     return {"action": "check_call", "reason": "仍然相信这手顶对" if top_pair and archetype == "calling" else "以当前价格继续，观察后续行动"}

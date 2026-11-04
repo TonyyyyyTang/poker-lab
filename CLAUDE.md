@@ -16,7 +16,10 @@ Play money only.
   Integer chips, 2 units = 1 BB. Seat 0 is the human.
 - `poker_lab/bots.py` — `choose_action(observation, style, rng)`; profiles `tight`,
   `calling`, `bold`. Preflop strength score vs position/price threshold; postflop
-  32-sample Monte Carlo equity vs random hands plus style biases.
+  32-sample Monte Carlo equity vs random hands plus style biases, shifted by
+  opponent reads.
+- `poker_lab/opponents.py` — per-table public opponent statistics with Beta priors;
+  updated from each completed hand's public record, passed to bots as `reads`.
 - `poker_lab/server.py` — stdlib HTTP on 127.0.0.1:8765, in-memory cookie sessions,
   JSON API under `/api/`.
 - `web/` — buildless HTML/CSS/JS; the client advances bot turns via `/api/step`.
@@ -24,11 +27,12 @@ Play money only.
   policy differences, server versioning.
 
 ## Status (4 Nov 2026)
-Working: full hand loop, five bots on three profiles, time-correct replay, 17 tests.
+Working: full hand loop, five bots on three profiles that adapt to public opponent
+statistics, time-correct replay, 24 tests.
 Known gaps: bot equity is vs random hands (noisy, range-blind); bot reasons and
 policy/engine versions are discarded; per-hand action traces are not stored;
 review gives one pot-odds note per hand; replay repeats the final step;
-`web/style.css` is a single minified line; no persistence.
+no persistence.
 
 ## Run
     python3 -m venv .venv && .venv/bin/python -m pip install -r requirements.txt
