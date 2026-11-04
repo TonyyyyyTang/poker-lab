@@ -3,7 +3,7 @@
   const $ = (id) => document.getElementById(id);
   const streets = {preflop: '翻牌前', flop: '翻牌', turn: '转牌', river: '河牌', showdown: '摊牌'};
   const styleNames = {tight: '耐心等好牌', calling: '爱跟着看看', bold: '喜欢施加压力'};
-  let state = null, busy = false, timer = null, amount = null, amountVersion = null, replay = null, replayIndex = 0, failed = false;
+  let state = null, busy = false, poller = null, amount = null, amountVersion = null, replay = null, replayIndex = 0, failed = false;
   const bb = (units) => (units / 2).toLocaleString('en-US', {maximumFractionDigits: 1});
   const signed = (units) => `${units > 0 ? '+' : units < 0 ? '−' : ''}${bb(Math.abs(units))}`;
   const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -14,27 +14,37 @@
     return `<span class="card ${suit === 'h' || suit === 'd' ? 'red' : ''}" aria-label="${esc(code)}"><span class="rank">${esc(rank)}</span><span class="suit">${symbol}</span><span class="corner-suit">${symbol}</span></span>`;
   };
   const cards = (values = [], count = 2, empty = false) => Array.from({length: Math.max(count, values.length)}, (_, i) => card(values[i], empty)).join('');
-  async function api(path, body) {
-    const response = await fetch(path, {method: body === undefined ? 'GET' : 'POST', headers: {'Content-Type': 'application/json'}, credentials: 'same-origin', body: body === undefined ? undefined : JSON.stringify(body)});
+  const spot = (id) => (id - state.you + 6) % 6;  // Seat classes place the viewer at the bottom.
+  async function api(path, body, signal) {
+    const response = await fetch(path, {method: body === undefined ? 'GET' : 'POST', headers: {'Content-Type': 'application/json'}, credentials: 'same-origin', body: body === undefined ? undefined : JSON.stringify(body), signal});
     let data;
     try { data = await response.json(); } catch { throw new Error('牌桌暂时没有回应，请重新连接。'); }
     if (!response.ok) throw new Error(data.error);
     return data;
   }
-  function showError(error) { failed = true; clearTimeout(timer); $('error-message').textContent = error.message || '连接中断，请重试。'; $('error-banner').hidden = false; }
+  function showError(error) { failed = true; stopPolling(); $('error-message').textContent = error.message || '连接中断，请重试。'; $('error-banner').hidden = false; }
   function clearError() { failed = false; $('error-banner').hidden = true; }
-  function isPaused() { return $('history-dialog').open || $('reset-dialog').open; }
-  function scheduleBot() {
-    clearTimeout(timer);
-    if (!state || busy || failed || document.hidden || isPaused() || state.complete || state.current_actor === 0 || state.current_actor == null) return;
-    timer = setTimeout(() => transition('/api/step', {version: state.version}), 850);
+  function stopPolling() { poller?.abort(); poller = null; }
+  // The server runs the game. Keep one long poll open while the tab is visible;
+  // a hidden tab stops polling so the free server can sleep.
+  async function poll() {
+    if (poller || !state || failed || document.hidden) return;
+    const controller = poller = new AbortController();
+    try {
+      while (poller === controller) {
+        const next = await api(`/api/state?after=${state.version}`, undefined, controller.signal);
+        if (poller === controller && next.version > state.version) { state = next; render(); }
+      }
+    } catch (error) {
+      if (poller === controller) { poller = null; showError(error); }
+    }
   }
   async function transition(path, body = {}) {
     if (busy) return;
-    clearTimeout(timer); busy = true; renderActions();
+    busy = true; renderActions();
     try { state = await api(path, body); clearError(); render(); }
     catch (error) { showError(error); }
-    finally { busy = false; renderActions(); scheduleBot(); }
+    finally { busy = false; renderActions(); poll(); }
   }
   function render() {
     if (!state) return;
@@ -42,7 +52,7 @@
     $('pot').innerHTML = `<span>${state.complete ? '本手底池' : '底池'}</span> <strong>${bb(state.pot)}</strong> <small>BB</small>`;
     $('board').innerHTML = cards(state.board, 5, true);
     const actor = state.players.find((p) => p.id === state.current_actor);
-    $('table-message').textContent = state.complete ? state.summary || '这一手已经结束' : state.current_actor === 0 ? '轮到你了，慢慢来。' : actor ? `${actor.name} 正在想一想…` : '正在发牌…';
+    $('table-message').textContent = state.complete ? state.summary || '这一手已经结束' : state.current_actor === state.you ? '轮到你了，慢慢来。' : actor ? `${actor.name} 正在想一想…` : '正在发牌…';
     $('hand-marker').textContent = `第 ${state.hand_id} 手`;
     $('activity-hand').textContent = `HAND ${String(state.hand_id).padStart(3, '0')}`;
     $('session-hands').innerHTML = `${Math.max(0, state.hand_id - (state.complete ? 0 : 1))} <small>手</small>`;
@@ -50,9 +60,9 @@
     $('session-net').className = state.session_net > 0 ? 'positive' : state.session_net < 0 ? 'negative' : '';
     $('seats').innerHTML = state.players.map((p) => {
       const active = !state.complete && state.current_actor === p.id;
-      const style = p.id === 0 ? '你的座位' : styleNames[p.style];
+      const style = p.id === state.you ? '你的座位' : styleNames[p.style];
       return [
-        `<div class="seat seat-${p.id} ${!p.in_hand ? 'folded' : ''} ${active ? 'active' : ''} ${p.all_in ? 'all-in' : ''}">`,
+        `<div class="seat seat-${spot(p.id)} ${!p.in_hand ? 'folded' : ''} ${active ? 'active' : ''} ${p.all_in ? 'all-in' : ''}">`,
         '<div class="seat-person">',
         `<span class="avatar" style="--avatar-color:${p.color}">${esc(p.avatar)}</span>`,
         '<div class="seat-details">',
@@ -65,7 +75,7 @@
         `<div class="seat-cards">${cards(p.cards)}</div>`,
         `<div class="seat-action">${p.all_in ? 'ALL IN' : active ? '思考中…' : esc(p.last_action || '已入座')}</div>`,
         '</div>',
-        p.bet > 0 && !state.complete ? `<div class="bet-chip bet-${p.id}">${bb(p.bet)}</div>` : '',
+        p.bet > 0 && !state.complete ? `<div class="bet-chip bet-${spot(p.id)}">${bb(p.bet)}</div>` : '',
       ].join('');
     }).join('');
     const list = $('activity-list'); const wasBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 60;
@@ -99,7 +109,7 @@
       $('next-hand').onclick = () => transition('/api/next', {version: state.version});
       return;
     }
-    if (state.current_actor !== 0) {
+    if (state.current_actor !== state.you) {
       const actor = state.players.find((p) => p.id === state.current_actor);
       panel.innerHTML = `<div class="waiting-state"><span class="loading-dot"></span>${esc(actor ? `等 ${actor.name} 行动` : '正在发牌')}<span style="color:#a2aa97;font-size:10px;margin-left:8px">看看朋友们怎么打</span></div>`;
       return;
@@ -107,7 +117,7 @@
     const legal = state.legal, min = legal.min_raise_to, max = legal.max_raise_to;
     if (amountVersion !== state.version) { amount = min; amountVersion = state.version; }
     amount = Math.max(min, Math.min(max, Number(amount) || min));
-    const hero = state.players.find((p) => p.id === 0), canRaise = legal.can_raise;
+    const hero = state.players.find((p) => p.id === state.you), canRaise = legal.can_raise;
     const disabled = busy ? 'disabled' : '';
     const sizing = [
       '<div class="sizing">',
@@ -154,7 +164,6 @@
     }
   }
   async function openHistory(handId) {
-    clearTimeout(timer);
     if (!$('history-dialog').open) $('history-dialog').showModal();
     $('history-content').innerHTML = '<div class="waiting-state"><span class="loading-dot"></span>翻开牌局记录…</div>';
     try {
@@ -222,17 +231,15 @@
   }
   $('history-button').onclick = () => openHistory();
   $('close-history').onclick = () => $('history-dialog').close();
-  $('history-dialog').addEventListener('close', scheduleBot);
-  $('reset-button').onclick = () => { clearTimeout(timer); $('reset-dialog').showModal(); };
+  $('reset-button').onclick = () => $('reset-dialog').showModal();
   $('cancel-reset').onclick = () => $('reset-dialog').close();
-  $('reset-dialog').addEventListener('close', scheduleBot);
   $('confirm-reset').onclick = () => { $('reset-dialog').close(); transition('/api/reset'); };
   $('retry-button').onclick = async () => {
     if (busy) return; busy = true;
     try { state = await api('/api/session', {}); clearError(); render(); }
     catch (error) { showError(error); }
-    finally { busy = false; renderActions(); scheduleBot(); }
+    finally { busy = false; renderActions(); poll(); }
   };
-  document.addEventListener('visibilitychange', () => { if (document.hidden) clearTimeout(timer); else scheduleBot(); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) stopPolling(); else poll(); });
   transition('/api/session');
 })();
