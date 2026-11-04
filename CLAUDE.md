@@ -13,7 +13,8 @@ Play money only.
 ## Structure
 - `poker_lab/game.py` — `Table`: PokerKit 0.7.4 adapter. Dealing (seeded per hand),
   legal actions, settlement, seat observations, replay frames, last 20 hands.
-  Integer chips, 2 units = 1 BB. Seat 0 is the human.
+  Integer chips, 2 units = 1 BB. Any seat can be human; the server runs bot turns,
+  turn timers and (on shared tables) automatic dealing.
 - `poker_lab/bots.py` — `choose_action(observation, style, rng)`; profiles `tight`,
   `calling`, `bold`. Preflop strength score vs position/price threshold; postflop
   32-sample Monte Carlo equity vs random hands plus style biases, shifted by
@@ -22,7 +23,8 @@ Play money only.
   updated from each completed hand's public record, passed to bots as `reads`.
 - `poker_lab/server.py` — stdlib HTTP; `HOST`/`PORT` from the environment (127.0.0.1:8765
   locally); in-memory cookie sessions (at most 100, 2 h idle expiry); JSON API under `/api/`.
-- `web/` — buildless HTML/CSS/JS; the client advances bot turns via `/api/step`.
+- `web/` — buildless HTML/CSS/JS; long-polls `GET /api/state?after=<version>` while visible;
+  invite links are `/t/<code>`.
 - `tests/` — unittest: engine edge cases, observation isolation, determinism,
   policy differences, server versioning.
 
