@@ -31,6 +31,7 @@ button, input {
 
 button {
   cursor: pointer;
+  transition: background .18s,transform .18s,opacity .18s;
 }
 
 button:disabled {
@@ -41,10 +42,6 @@ button:disabled {
 button:focus-visible, a:focus-visible, input:focus-visible {
   outline: 3px solid #ba9656;
   outline-offset: 4px;
-}
-
-button {
-  transition: background .18s,transform .18s,opacity .18s;
 }
 
 button:not(:disabled):active {
@@ -422,6 +419,11 @@ button[hidden], [hidden] {
   justify-content: center;
   position: relative;
   gap: 6px;
+  background: #f4f1e9f2;
+  border: 1px solid #deded2;
+  border-radius: 9px;
+  padding: 5px 4px;
+  min-height: 46px;
 }
 
 .avatar {
@@ -520,7 +522,7 @@ button[hidden], [hidden] {
 }
 
 .seat.folded {
-  opacity: .48;
+  opacity: .68;
 }
 
 .seat.folded .seat-cards {
@@ -560,7 +562,7 @@ button[hidden], [hidden] {
 
 .seat-0 .seat-cards {
   position: absolute;
-  bottom: 53px;
+  bottom: 64px;
   left: 50%;
   transform: translateX(-50%);
   height: 74px;
@@ -1677,11 +1679,11 @@ button[hidden], [hidden] {
     top: 91%;
   }
   .seat-1 {
-    left: 12%;
+    left: 16%;
     top: 68%;
   }
   .seat-2 {
-    left: 12%;
+    left: 16%;
     top: 29%;
   }
   .seat-3 {
@@ -1689,15 +1691,17 @@ button[hidden], [hidden] {
     top: 9%;
   }
   .seat-4 {
-    left: 88%;
+    left: 84%;
     top: 29%;
   }
   .seat-5 {
-    left: 88%;
+    left: 84%;
     top: 68%;
   }
   .seat-person {
     gap: 5px;
+    min-height: 38px;
+    padding: 4px 3px;
   }
   .avatar {
     width: 27px;
@@ -1722,7 +1726,7 @@ button[hidden], [hidden] {
     margin-left: 2px;
   }
   .seat-position {
-    right: -3px;
+    right: 0;
     top: -4px;
     font-size: 7px;
     padding: 1px 3px;
@@ -1764,7 +1768,7 @@ button[hidden], [hidden] {
     padding: 2px 4px;
   }
   .seat-0 .seat-cards {
-    bottom: 48px;
+    bottom: 58px;
     height: 60px;
     gap: 4px;
   }
@@ -1974,45 +1978,5 @@ button[hidden], [hidden] {
   * {
     animation: none!important;
     transition: none!important;
-  }
-}
-
-/* Keep the outer seats inside small phone viewports. */
-@media (max-width: 560px) {
-  .seat-1, .seat-2 {
-    left: 16%;
-  }
-  .seat-4, .seat-5 {
-    left: 84%;
-  }
-  .seat-position {
-    right: 0;
-  }
-}
-
-/* A light nameplate preserves contrast wherever a seat crosses the felt. */
-.seat-person {
-  background: #f4f1e9f2;
-  border: 1px solid #deded2;
-  border-radius: 9px;
-  padding: 5px 4px;
-  min-height: 46px;
-}
-
-.seat.folded {
-  opacity: .68;
-}
-
-.seat-0 .seat-cards {
-  bottom: 64px;
-}
-
-@media (max-width: 560px) {
-  .seat-person {
-    min-height: 38px;
-    padding: 4px 3px;
-  }
-  .seat-0 .seat-cards {
-    bottom: 58px;
   }
 }
