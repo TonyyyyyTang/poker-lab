@@ -28,7 +28,7 @@ Play a hand, review it after settlement, then deal the next one. All raise amoun
 
 These are deliberately imperfect heuristic policies, not GTO agents. Postflop decisions use a small Monte Carlo estimate against random holdings, together with position, pot odds, draw features and style biases. This is a rough internal signal, not a claim about optimal action value.
 
-The bots also learn how each player at the table plays, using only public actions and cards shown at showdown: how often someone enters pots, raises, folds to a bet, bets aggressively, and how often a river bet turned out to be a bluff. Each estimate starts from a population prior and firms up with evidence, so a few hands barely move it. Against a player who folds too much they bluff more and value-bet less thinly; against one who calls everything they bluff less and bet bigger; against a shown bluffer they call more lightly. 阿岚 and 知夏 adapt quickly, Leo more slowly, and 小满 and 老周 hardly at all. A new table starts with no reads.
+The bots also learn how each player at the table plays, using only public actions and cards shown at showdown: how often someone enters pots, raises, folds to a bet, bets aggressively, and how often a river bet turned out to be a bluff. Each estimate starts from a population prior and firms up with evidence, so a few hands barely move it. Against a player who folds too much they bluff more, and once the estimated chance that everyone folds beats the price of the bet, they bet with any two cards; against one who calls everything they bluff less and bet bigger; against a shown bluffer they call more lightly. 阿岚 and 知夏 adapt quickly, Leo more slowly, and 小满 and 老周 least. A new table starts with no reads.
 
 ## Replay and information boundaries
 

@@ -113,10 +113,17 @@ class AdaptationTests(unittest.TestCase):
         bluffer = actions(river_spot(reads(river_bluff=[30, 40], aggression=[60, 100])), "tight")["fold"]
         self.assertLess(bluffer, prior * 0.5)
 
-    def test_calling_style_barely_adapts(self):
-        prior = actions(flop_spot(reads()), "calling")["raise"]
-        folder = actions(flop_spot(reads(fold_to_bet=[140, 200])), "calling")["raise"]
-        self.assertLessEqual(folder - prior, 5)
+    def test_bet_any_two_cards_when_fold_equity_beats_the_price(self):
+        prior = actions(flop_spot(reads()), "tight")["raise"]
+        folder = actions(flop_spot(reads(fold_to_bet=[140, 200])), "tight")["raise"]
+        self.assertLess(prior, 20)
+        self.assertGreater(folder, 80)
+
+    def test_calling_style_adapts_least(self):
+        def gain(style):
+            prior = actions(flop_spot(reads()), style)["raise"]
+            return actions(flop_spot(reads(fold_to_bet=[140, 200])), style)["raise"] - prior
+        self.assertLess(gain("calling"), 0.4 * gain("tight"))
 
 
 if __name__ == "__main__":
