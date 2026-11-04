@@ -38,7 +38,7 @@ The server sends language-neutral data: codes, seat numbers and amounts. The bro
    - `{"kind": "result", "actions": n, "net": units}`
    - `{"kind": "pot_odds", "street": s, "call": units, "eligible": units, "required": percent}` (`required` rounded to one decimal)
    - `{"kind": "visibility"}`
-6. **Bot names.** Each player has `name_en` beside `name`: 阿岚 A-Lan, 小满 Xiaoman, Leo Leo, 知夏 Zhixia, 老周 Lao Zhou, 阿禾 A-He. For humans `name_en` equals the name they typed. The unnamed solo player's default label is `name: "你", name_en: "You"`; this exception does not translate a guest who actually typed `"你"`.
+6. **Names.** Each player has `name_en` beside `name`: 阿岚 A-Lan, 小满 Xiaoman, Leo Leo, 知夏 Zhixia, 老周 Lao Zhou, 阿禾 A-He, and the solo player's default 你 → You. For guests `name_en` equals the name they typed.
 
 Replay frames and history use the same shapes. No other JSON changes.
 
