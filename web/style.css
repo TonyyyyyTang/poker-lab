@@ -62,6 +62,7 @@ button[hidden], [hidden] {
 }
 
 .brand {
+  white-space: nowrap;
   color: var(--ink);
   text-decoration: none;
   display: flex;
@@ -1567,8 +1568,7 @@ button[hidden], [hidden] {
     font-size: 25px;
   }
   .room-label {
-    font-size: 10px;
-    gap: 6px;
+    display: none;
   }
   .room-label .room-divider {
     margin: 0;
@@ -2039,4 +2039,13 @@ button[hidden], [hidden] {
 .countdown {
   font-variant-numeric: tabular-nums;
   margin-left: 4px;
+}
+
+/* Translatable labels inside buttons use <i> so icon-span rules do not apply to them. */
+.icon-button i, .text-button i {
+  font-style: normal;
+}
+
+.lang-button {
+  letter-spacing: 1px;
 }
