@@ -1,4 +1,4 @@
-"""Solo-table HTTP app. PokerKit remains authoritative."""
+"""HTTP sessions, long polling and server-driven tables. PokerKit is authoritative."""
 from collections import OrderedDict
 from dataclasses import dataclass
 from http.cookies import SimpleCookie
@@ -11,52 +11,125 @@ from pathlib import Path
 import secrets
 import threading
 import time
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from .game import HAND_HISTORY_LIMIT, Table
 
 ROOT = Path(__file__).resolve().parent.parent
 MAX_SESSIONS = 100
 SESSION_IDLE_SECONDS = 2 * 60 * 60
-LOCK = threading.RLock()
+LONG_POLL_SECONDS = 25
+REGISTRY_LOCK = threading.RLock()
+WAKE = threading.Event()
 
 
 @dataclass
 class Session:
-    table: Table
+    table_id: str
+    seat: int
     last_seen: float
+    active: bool = True
 
 
 SESSIONS: OrderedDict[str, Session] = OrderedDict()
+TABLES: dict[str, Table] = {}
+
+
+def _retire_binding(session):
+    """Registry helpers hold REGISTRY_LOCK; never acquire it while holding a table lock."""
+    session.active = False
+    table = TABLES[session.table_id]
+    if not any(s.table_id == session.table_id for s in SESSIONS.values()):
+        del TABLES[session.table_id]
+        table.close()
+    else:
+        # A reset/eviction must also wake polls on a table still used by other seats.
+        with table.changed:
+            table.changed.notify_all()
+    WAKE.set()
+
+
+def _drop_session(sid):
+    _retire_binding(SESSIONS.pop(sid))
 
 
 def _expire_sessions(now):
-    """Remove the expired LRU prefix. Session helpers run with LOCK held."""
     while SESSIONS:
         sid, session = next(iter(SESSIONS.items()))
         if now - session.last_seen <= SESSION_IDLE_SECONDS:
             break
-        del SESSIONS[sid]
+        _drop_session(sid)
 
 
-def _get_session_table(sid):
+def _register_table(table):
+    if table.closed:
+        raise ValueError("牌桌已关闭。")
+    for table_id, registered in TABLES.items():
+        if registered is table:
+            return table_id
+    table_id = secrets.token_urlsafe(24)
+    table.wake = WAKE.set
+    TABLES[table_id] = table
+    return table_id
+
+
+def _store_session(sid, table_id, seat=0):
     now = time.monotonic()
     _expire_sessions(now)
-    session = SESSIONS.get(sid)
-    if session is None:
-        return None
-    session.last_seen = now
+    table = TABLES[table_id]
+    if type(seat) is not int or not 0 <= seat < 6 or table.closed or table.players[seat]["kind"] != "human":
+        raise ValueError("会话必须对应一个玩家座位。")
+    previous = SESSIONS.get(sid)
+    session = Session(table_id, seat, now)
+    SESSIONS[sid] = session
     SESSIONS.move_to_end(sid)
-    return session.table
-
-
-def _store_session(sid, table):
-    now = time.monotonic()
-    _expire_sessions(now)
-    SESSIONS[sid] = Session(table, now)
-    SESSIONS.move_to_end(sid)
+    if previous is not None:
+        _retire_binding(previous)
     while len(SESSIONS) > MAX_SESSIONS:
-        SESSIONS.popitem(last=False)
+        _drop_session(next(iter(SESSIONS)))
+    WAKE.set()
+    return session
+
+
+def _resolve_session(sid):
+    with REGISTRY_LOCK:
+        now = time.monotonic()
+        _expire_sessions(now)
+        session = SESSIONS.get(sid)
+        if session is None:
+            return None
+        if TABLES[session.table_id].closed:
+            _drop_session(sid)
+            return None
+        session.last_seen = now
+        SESSIONS.move_to_end(sid)
+        return session, TABLES[session.table_id]
+
+
+def drive_tables():
+    """One scheduler pass; policy computation happens after releasing the registry lock."""
+    with REGISTRY_LOCK:
+        _expire_sessions(time.monotonic())
+        tables = list(TABLES.values())
+    for table in tables:
+        try:
+            table.run_due()
+        except Exception:
+            import traceback
+            traceback.print_exc()
+    with REGISTRY_LOCK:
+        deadlines = [s.last_seen + SESSION_IDLE_SECONDS + 0.001 for s in SESSIONS.values()]
+        tables = list(TABLES.values())
+    deadlines.extend(due for table in tables if (due := table.next_due()) is not None)
+    return max(0, min(deadlines) - time.monotonic()) if deadlines else None
+
+
+def run_scheduler(stop):
+    while not stop.is_set():
+        WAKE.clear()
+        delay = drive_tables()
+        if not stop.is_set():
+            WAKE.wait(delay)
 
 
 def same_origin_host(origin, host):
@@ -102,30 +175,59 @@ class Handler(BaseHTTPRequestHandler):
             return None
         return cookie["poker_session"].value if "poker_session" in cookie else None
 
+    def session_expired(self):
+        return self.reply(401, {"error": "牌桌已过期或服务已重启，请重新连接开始新的一场。"})
+
     def do_GET(self):
-        path = urlsplit(self.path).path
+        url = urlsplit(self.path)
+        path = url.path
         if path == "/healthz":
-            with LOCK:
+            with REGISTRY_LOCK:
                 _expire_sessions(time.monotonic())
             return self.reply(200, {"ok": True})
         if path.startswith("/api/"):
-            with LOCK:
-                table = _get_session_table(self.session_id())
-                if table is None:
-                    return self.reply(401, {"error": "牌桌已过期或服务已重启，请重新连接开始新的一场。"})
-                if path == "/api/state":
-                    return self.reply(200, table.snapshot())
-                if path == "/api/history":
-                    return self.reply(200, {"hands": [{k: h[k] for k in ("hand_id", "summary", "net", "board")}
-                                                     for h in reversed(table.hands)]})
-                if path.startswith("/api/hand/"):
-                    try:
-                        hand_id = int(path.rsplit("/", 1)[-1])
-                    except ValueError:
-                        return self.reply(404, {"error": "找不到这手牌。"})
-                    hand = next((h for h in table.hands if h["hand_id"] == hand_id), None)
-                    return self.reply(200, hand) if hand else self.reply(404, {"error": f"这手牌尚未结束或已不在最近 {HAND_HISTORY_LIMIT} 手中。"})
+            if path not in ("/api/state", "/api/history") and not path.startswith("/api/hand/"):
                 return self.reply(404, {"error": "接口不存在。"})
+            after = None
+            try:
+                values = parse_qs(url.query, keep_blank_values=True).get("after")
+                if path == "/api/state" and values is not None:
+                    if len(values) != 1:
+                        raise ValueError
+                    after = int(values[0])
+                    if after < 0:
+                        raise ValueError
+            except ValueError:
+                return self.reply(400, {"error": "版本号格式错误。"})
+            while True:
+                binding = _resolve_session(self.session_id())
+                if binding is None:
+                    return self.session_expired()
+                session, table = binding
+                with table.changed:
+                    if not session.active or table.closed:
+                        continue
+                    if path == "/api/state":
+                        if after is not None:
+                            table.changed.wait_for(
+                                lambda: table.version > after or not session.active or table.closed,
+                                timeout=LONG_POLL_SECONDS)
+                        if not session.active or table.closed:
+                            continue
+                        status, body = 200, table.view(session.seat)
+                    elif path == "/api/history":
+                        status, body = 200, {"hands": table.history(session.seat)}
+                    else:
+                        try:
+                            hand_id = int(path.rsplit("/", 1)[-1])
+                        except ValueError:
+                            status, body = 404, {"error": "找不到这手牌。"}
+                        else:
+                            hand = table.hand(hand_id, session.seat)
+                            status, body = (200, hand) if hand else (404, {
+                                "error": f"这手牌尚未结束或已不在最近 {HAND_HISTORY_LIMIT} 手中。"})
+                # Never hold a table or registry lock while writing to a slow browser.
+                return self.reply(status, body)
         # An explicit allowlist keeps private files and source code off the web server.
         files = {"/": "index.html", "/index.html": "index.html", "/style.css": "style.css", "/app.js": "app.js"}
         if path not in files:
@@ -147,6 +249,9 @@ class Handler(BaseHTTPRequestHandler):
         origin = self.headers.get("Origin")
         if origin is not None and not same_origin_host(origin, self.headers.get("Host")):
             return self.reply(403, {"error": "仅接受当前站点牌桌的操作。"})
+        path = urlsplit(self.path).path
+        if path not in ("/api/session", "/api/reset", "/api/action", "/api/next"):
+            return self.reply(404, {"error": "接口不存在。"})
         try:
             length = int(self.headers.get("Content-Length", "0"))
             if not 0 <= length <= 4096:
@@ -156,45 +261,57 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("请求格式错误。")
         except (ValueError, json.JSONDecodeError):
             return self.reply(400, {"error": "请求格式错误。"})
-        path = urlsplit(self.path).path
-        with LOCK:
-            sid = self.session_id()
-            table = _get_session_table(sid)
-            if path == "/api/session":
-                if table is None:
-                    sid = secrets.token_urlsafe(32)
-                    table = Table()
-                    _store_session(sid, table)
-                return self.reply(200, table.snapshot(), cookie=sid)
-            if table is None:
-                return self.reply(401, {"error": "牌桌已过期或服务已重启，请重新连接开始新的一场。"})
-            try:
-                if path == "/api/reset":
-                    previous_version = table.version
-                    table = Table()
-                    _store_session(sid, table)
-                    table.version = previous_version + 1
-                    table.frames = [table.snapshot()]
-                    return self.reply(200, table.snapshot())
-                version = payload.get("version")
-                if type(version) is not int or version != table.version:
-                    raise ValueError("牌局已更新，请重试当前操作。")
-                if path == "/api/action":
-                    result = table.act(0, payload.get("action"), payload.get("amount"), version)
-                elif path == "/api/step":
-                    result = table.step_bot(version)
-                elif path == "/api/next":
-                    table.new_hand()
-                    result = table.snapshot()
+        sid = self.session_id()
+        binding = _resolve_session(sid)
+        if path == "/api/session":
+            if binding is None:
+                table = Table()
+                sid = secrets.token_urlsafe(32)
+                with REGISTRY_LOCK:
+                    session = _store_session(sid, _register_table(table))
+                binding = session, table
+            session, table = binding
+            with table.lock:
+                if not session.active or table.closed:
+                    body = None
                 else:
-                    return self.reply(404, {"error": "接口不存在。"})
-                return self.reply(200, result)
-            except ValueError as exc:
-                return self.reply(409, {"error": str(exc)})
-            except Exception:
-                import traceback
-                traceback.print_exc()
-                return self.reply(500, {"error": "牌局遇到错误，请刷新后重试。"})
+                    body = table.view(session.seat)
+            return self.reply(200, body, cookie=sid) if body is not None else self.session_expired()
+        if binding is None:
+            return self.session_expired()
+        session, table = binding
+        if path == "/api/reset":
+            with REGISTRY_LOCK:
+                if SESSIONS.get(sid) is not session:
+                    body = None
+                else:
+                    with table.lock:
+                        fresh = Table(version=table.version)
+                        _store_session(sid, _register_table(fresh))
+                        body = fresh.view(0)
+            return self.reply(200, body) if body is not None else self.session_expired()
+        with table.lock:
+            if not session.active or table.closed:
+                status, body = 401, {"error": "牌桌已过期或服务已重启，请重新连接开始新的一场。"}
+            else:
+                try:
+                    if table.players[session.seat]["kind"] != "human":
+                        raise ValueError("此座位由对手控制。")
+                    version = payload.get("version")
+                    if type(version) is not int or version != table.version:
+                        raise ValueError("牌局已更新，请重试当前操作。")
+                    if path == "/api/action":
+                        table.act(session.seat, payload.get("action"), payload.get("amount"), version)
+                    else:
+                        table.new_hand()
+                    status, body = 200, table.view(session.seat)
+                except ValueError as exc:
+                    status, body = 409, {"error": str(exc)}
+                except Exception:
+                    import traceback
+                    traceback.print_exc()
+                    status, body = 500, {"error": "牌局遇到错误，请刷新后重试。"}
+        return self.reply(status, body)
 
 
 def main():
@@ -204,11 +321,20 @@ def main():
     host = os.environ.get("HOST", "127.0.0.1")
     server = ThreadingHTTPServer((host, args.port), Handler)
     print(f"Poker Lab · http://{host}:{args.port}", flush=True)
+    stop = threading.Event()
+    worker = threading.Thread(target=run_scheduler, args=(stop,), name="table-driver", daemon=True)
+    worker.start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        stop.set()
+        WAKE.set()
+        worker.join()
+        with REGISTRY_LOCK:
+            for sid in list(SESSIONS):
+                _drop_session(sid)
         server.server_close()
 
 

@@ -82,7 +82,7 @@ class OpponentStatsTests(unittest.TestCase):
             table = Table(seed=seed)
             while table.state.status:
                 legal = table.legal()
-                if table.snapshot()["street"] == "preflop":
+                if table.view(0)["street"] == "preflop":
                     table.act(table.actor, "check_call")
                 elif legal["can_check"]:
                     table.act(table.actor, "raise", legal["min_raise_to"])

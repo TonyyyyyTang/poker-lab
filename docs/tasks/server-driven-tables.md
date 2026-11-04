@@ -81,3 +81,13 @@ The two branches only work together. The owner merges `codex/server-driven-table
 ## Out of scope
 
 Invite links, guest names, joining a table, WebSockets, lobby or seat UI, a turn-timer UI, persistence, automatic dealing, and any change to bot policy.
+
+## Backend handoff — 4 November 2026
+
+Implemented on `codex/server-driven-tables`. `Table(players=...)` accepts six human/bot seat configurations; `view(seat)`, `history(seat)` and `hand(hand_id, seat)` project the specified JSON contract. Stored replay frames are public, with original hole cards kept separately and only the viewer's cards added to responses. Nets and notes are per seat. Sessions bind to table IDs and human seats; removing the last binding closes the table and wakes its polls.
+
+`Table(clock=..., turn_seconds=...)` supports deterministic deadline tests; `run_due()` performs one due action. The server starts one background driver in `main`. Policy computation uses detached observations and RNG copies outside both locks, and stale results leave the live RNG unchanged. Long polls use the per-table condition with a 25-second timeout; reset and expiry also wake them. `/api/step` returns 404. `web/`, bot policies and dependencies are unchanged.
+
+Verification: all 56 tests pass on Python 3.13.2, including two-human privacy, replay/net/notes, rotated seats, fake-clock pacing and timeouts, stale thinking, session eviction, reset during a long poll and the exact response keys. Local HTTP smoke checks on port 18766 passed a complete hand, long-poll bot updates, history, replay, next hand, reset and cookie-based resume. The sampled post-fold hand completed in 3.24 seconds; unit tests verify the required 0.2-second per-action pace, with total duration depending on the number of actions. The temporary server was stopped after verification.
+
+Pending: combined desktop/phone checks with `claude/live-client`. The owner merges the backend, then the client, and pushes once. No deployment was performed.

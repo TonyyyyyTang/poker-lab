@@ -1,17 +1,21 @@
 # Architecture
 
-Status: public solo table live on Render's free tier, with adaptive bots, 4 November 2026. The design below includes later extensions, identified as proposals.
+Status: public solo table live on Render's free tier, with adaptive bots; server-driven backend prepared for review on 4 November 2026. The matching live client must land before deployment. The design below includes later extensions, identified as proposals.
 
 ## Implemented slice
 
-- `poker_lab/game.py`: PokerKit 0.7.4 adapter; fixed physical seats mapped to rotating engine positions; 2 integer units per BB; independently seeded dealing and policy streams; filtered seat observations; immutable public replay frames; recent hand history.
+- `poker_lab/game.py`: PokerKit 0.7.4 adapter; configurable human/bot seats mapped to rotating engine positions; 2 integer units per BB; independently seeded dealing and policy streams; per-viewer live/replay views, nets and notes; clock-driven bot pacing and optional human deadlines.
 - `poker_lab/opponents.py`: per-table opponent statistics (entry, raising, folding to bets, aggression, shown river bluffs) counted from completed hands' public records, with Beta-prior estimates.
 - `poker_lab/bots.py`: three configured heuristic policies, adjusted by those statistics according to each personality's trust and adaptation rate, using position, preflop selection, public aggression, approximate random-range showdown share and explicit biases. No external model calls.
-- `poker_lab/server.py`: standard-library HTTP server bound to loopback by default, with `HOST`/`PORT` overrides for hosting, opaque per-browser session cookies (Secure behind HTTPS), versioned actions, serialised state changes, and an explicit static-file allowlist.
+- `poker_lab/server.py`: standard-library HTTP server bound to loopback by default, with `HOST`/`PORT` overrides for hosting, opaque per-browser session cookies (Secure behind HTTPS), separate session/table registries, per-table locking and long polling, a background turn scheduler, and an explicit static-file allowlist.
 - `web/`: native HTML, CSS and JavaScript for the six-seat table, actions and post-hand replay. No frontend toolchain is required.
 - `tests/`: adapter boundary tests and conditional policy comparisons.
 
-Sessions and each session's last 20 completed hands are held in process memory. The server keeps at most 100 sessions, evicting the least recently used when full. Sessions idle for more than two hours are removed on API requests or health checks. Reloading a page resumes via its cookie; restarting the service clears them. No database is used. The solo table is deployed on Render's free tier at https://poker-lab.onrender.com. Replay is visual history, not a branchable simulator yet. A deterministic seed and action trace exist inside each Table for verification, but are not sent through the public API.
+Sessions and each table's last 20 completed hands are held in process memory. The server keeps at most 100 sessions, evicting the least recently used when full. Sessions idle for more than two hours are removed by the scheduler, API requests or health checks. Reloading a page resumes via its cookie; restarting the service clears them. No database is used. The solo table is deployed on Render's free tier at https://poker-lab.onrender.com. Replay is visual history, not a branchable simulator yet. A deterministic seed and action trace exist inside each Table for verification, but are not sent through the public API.
+
+A session binds a browser to a table ID and a physical seat. Several sessions can refer to one table internally; the HTTP API still creates only solo tables. Losing the last session closes the table, cancels its deadline and wakes waiting requests. Registry operations use a short registry lock; table state uses its own lock and condition. Bot computation uses a copied observation and RNG outside both locks, then commits only if the table version still matches. Discarded work does not advance the live RNG.
+
+Bots are scheduled 0.85 seconds after each transition, or 0.2 seconds once all human seats have folded (or none are seated). Human deadlines are disabled by default; an enabled deadline checks for free or folds. `GET /api/state?after=N` waits on the table condition for a newer version or 25 seconds. `/api/step` has been removed. Replay storage contains public frames plus separate private hole-card storage; response projection adds only the requesting seat's own cards and selects its historical legal actions and session net.
 
 PokerKit is MIT licensed and was selected after checking its documented full betting/settlement model. Its API is pinned and tested at 0.7.4. Each browser session is a solo table; multiplayer is a later phase.
 

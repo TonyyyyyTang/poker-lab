@@ -4,6 +4,8 @@ from copy import deepcopy
 import hashlib
 import random
 import secrets
+import threading
+import time
 
 from pokerkit import Automation as A, Deck, Mode, NoLimitTexasHoldem
 
@@ -11,13 +13,15 @@ from .opponents import OpponentStats
 
 ENGINE_VERSION = "pokerkit-0.7.4/adapter-1"
 HAND_HISTORY_LIMIT = 20
+BOT_DELAY = 0.85
+FAST_BOT_DELAY = 0.2
 PLAYERS = [
-    dict(name="你", style="", avatar="你", color="#b7874c"),
-    dict(name="阿岚", style="tight", avatar="岚", color="#78988c"),
-    dict(name="小满", style="calling", avatar="满", color="#cf9e77"),
-    dict(name="Leo", style="bold", avatar="L", color="#8a8bb1"),
-    dict(name="知夏", style="tight", avatar="夏", color="#b3949e"),
-    dict(name="老周", style="calling", avatar="周", color="#8199ab"),
+    dict(kind="human", name="你", style="", avatar="你", color="#b7874c"),
+    dict(kind="bot", name="阿岚", style="tight", avatar="岚", color="#78988c"),
+    dict(kind="bot", name="小满", style="calling", avatar="满", color="#cf9e77"),
+    dict(kind="bot", name="Leo", style="bold", avatar="L", color="#8a8bb1"),
+    dict(kind="bot", name="知夏", style="tight", avatar="夏", color="#b3949e"),
+    dict(kind="bot", name="老周", style="calling", avatar="周", color="#8199ab"),
 ]
 AUTOMATIONS = (A.ANTE_POSTING, A.BET_COLLECTION, A.BLIND_OR_STRADDLE_POSTING,
                A.RUNOUT_COUNT_SELECTION, A.HOLE_CARDS_SHOWING_OR_MUCKING,
@@ -35,25 +39,56 @@ def bb(amount):
 
 
 class Table:
-    def __init__(self, seed=None, stacks=None, dealer=5):
+    def __init__(self, seed=None, stacks=None, dealer=5, players=None,
+                 turn_seconds=None, clock=None, version=0):
+        self.lock = threading.RLock()
+        self.changed = threading.Condition(self.lock)
+        self.clock = clock or time.monotonic
+        self.closed = False
+        self.wake = lambda: None
+        self._thinking_version = None
+        self.due_at = None
+        self.players = deepcopy(PLAYERS)
+        if players is not None:
+            if len(players) != 6:
+                raise ValueError("牌桌需要六个座位。")
+            for default, configured in zip(self.players, players):
+                default.update(configured)
+        for player in self.players:
+            if player["kind"] not in ("human", "bot") or not isinstance(player["name"], str):
+                raise ValueError("座位配置错误。")
+            if player["kind"] == "human":
+                player["style"] = ""
+            elif player["style"] not in ("tight", "calling", "bold"):
+                raise ValueError("未知的对手风格。")
+        if turn_seconds is not None and turn_seconds <= 0:
+            raise ValueError("行动时间必须大于零。")
+        self.turn_seconds = turn_seconds
         self.seed = secrets.randbits(128) if seed is None else seed
         self.stacks = list(stacks or [200] * 6)
         self.dealer = (dealer - 1) % 6
         self.hand_id = 0
-        self.version = 0
-        self.session_net = 0
+        self.version = version
+        self.session_net = [0] * 6
         self.hands = []
         self.opponent_stats = OpponentStats()
         self.new_hand()
 
     def new_hand(self):
+        with self.changed:
+            if self.closed:
+                raise ValueError("牌桌已关闭。")
+            self._new_hand()
+            self._schedule_next()
+
+    def _new_hand(self):
         if self.hand_id and self.state.status:
             raise ValueError("这手牌还没结束。")
         rebuys = []
         for seat, amount in enumerate(self.stacks):
             if amount < 2:
                 self.stacks[seat] = 200
-                rebuys.append(PLAYERS[seat]["name"])
+                rebuys.append(self.players[seat]["name"])
         self.hand_id += 1
         self.version += 1
         self.dealer = (self.dealer + 1) % 6
@@ -104,6 +139,10 @@ class Table:
         return [repr(cards[0]) for cards in self.state.board_cards]
 
     def observation(self, seat):
+        with self.lock:
+            return self._observation(seat)
+
+    def _observation(self, seat):
         """The ONLY input passed to a policy; no table or engine reference escapes."""
         i = self.indices[seat]
         call = self.legal()["call_amount"]
@@ -122,14 +161,14 @@ class Table:
                     all_in=[p for p in range(6) if self.state.stacks[self.indices[p]] == 0 and p not in self.folded],
                     reads=self.opponent_stats.snapshot())
 
-    def snapshot(self):
+    def _public_frame(self):
         s = self.state
         complete = not s.status
         players = []
-        for seat, player in enumerate(PLAYERS):
+        for seat, player in enumerate(self.players):
             i = self.indices[seat]
             # Style is a public character trait. No policy diagnostics or hidden cards.
-            cards = self.holes[seat] if seat == 0 else self.shown.get(seat, [])
+            cards = self.shown.get(seat, [])
             players.append(dict(id=seat, **player, stack=s.stacks[i], bet=s.bets[i],
                                 in_hand=seat not in self.folded,
                                 all_in=s.stacks[i] == 0 and seat not in self.folded,
@@ -143,15 +182,50 @@ class Table:
                     street="showdown" if complete else STREETS[s.street_index or 0],
                     board=self._board(), pot=pot, current_actor=self.actor,
                     dealer=self.dealer, big_blind=2, players=players,
-                    legal=self.legal() if self.actor == 0 else dict(can_fold=False, can_check=False,
-                        call_amount=0, can_raise=False, min_raise_to=0, max_raise_to=0),
-                    actions=deepcopy(self.actions), summary=self.summary,
-                    session_net=self.session_net)
+                    legal=self.legal(), actions=deepcopy(self.actions), summary=self.summary,
+                    session_net=self.session_net.copy())
+
+    @staticmethod
+    def _project(frame, seat, hole):
+        view = deepcopy(frame)
+        view["you"] = seat
+        view["players"][seat]["cards"] = hole.copy()
+        view["session_net"] = frame["session_net"][seat]
+        if frame["current_actor"] != seat:
+            view["legal"] = dict(can_fold=False, can_check=False, call_amount=0,
+                                 can_raise=False, min_raise_to=0, max_raise_to=0)
+        return view
+
+    def view(self, seat):
+        with self.lock:
+            return self._project(self._public_frame(), seat, self.holes[seat])
+
+    def history(self, seat):
+        with self.lock:
+            return [dict(hand_id=h["hand_id"], summary=h["summary"], net=h["nets"][seat],
+                         board=h["board"].copy()) for h in reversed(self.hands)]
+
+    def hand(self, hand_id, seat):
+        with self.lock:
+            hand = next((h for h in self.hands if h["hand_id"] == hand_id), None)
+            if hand is None:
+                return None
+            return dict(hand_id=hand_id, summary=hand["summary"], net=hand["nets"][seat],
+                        board=hand["board"].copy(), notes=self._review_notes(hand, seat),
+                        frames=[self._project(f, seat, hand["holes"][seat]) for f in hand["frames"]])
 
     def _record(self):
-        self.frames.append(self.snapshot())
+        self.frames.append(self._public_frame())
 
     def act(self, seat, action, amount=None, version=None):
+        with self.changed:
+            if self.closed:
+                raise ValueError("牌桌已关闭。")
+            result = self._act(seat, action, amount, version)
+            self._schedule_next()
+            return result
+
+    def _act(self, seat, action, amount=None, version=None):
         if version is not None and version != self.version:
             raise ValueError("牌局已更新，请按当前局面操作。")
         if not self.state.status or seat != self.actor:
@@ -184,13 +258,13 @@ class Table:
             label += " · 全下"
         self.last_actions[seat] = label
         self.actions.append(dict(player=seat, kind=action, amount=amount or contribution,
-                                 street=street, text=f"{PLAYERS[seat]['name']} · {label}"))
+                                 street=street, text=f"{self.players[seat]['name']} · {label}"))
         self.action_trace.append(dict(seat=seat, action=action, amount=amount))
         self.version += 1
         self._collect_reveals(old_count)
         self._record()
         self._advance()
-        return self.snapshot()
+        return self.view(seat)
 
     def _collect_reveals(self, start):
         for op in self.state.operations[start:]:
@@ -212,16 +286,17 @@ class Table:
             self._collect_reveals(start)
         if not s.status and not self._saved:
             self.stacks = [s.stacks[self.indices[seat]] for seat in range(6)]
-            self.session_net += s.payoffs[self.indices[0]]
-            winners = [f"{PLAYERS[seat]['name']} +{bb(s.payoffs[i])}"
+            for seat in range(6):
+                self.session_net[seat] += s.payoffs[self.indices[seat]]
+            winners = [f"{self.players[seat]['name']} +{bb(s.payoffs[i])}"
                        for i, seat in enumerate(self.seats) if s.payoffs[i] > 0]
             self.summary = "，".join(winners) or "平分底池"
             self.opponent_stats.update(self._public_record())
             self._record()
-            notes = self._review_notes()
             self.hands.append(dict(hand_id=self.hand_id, frames=deepcopy(self.frames),
-                                   summary=self.summary, notes=notes,
-                                   net=s.payoffs[self.indices[0]], board=self._board()))
+                                   summary=self.summary, start_stacks=self.start_stacks.copy(),
+                                   holes=deepcopy(self.holes),
+                                   nets=[s.payoffs[self.indices[p]] for p in range(6)], board=self._board()))
             self.hands = self.hands[-HAND_HISTORY_LIMIT:]
             self._saved = True
 
@@ -231,28 +306,84 @@ class Table:
                     actions=[dict(player=a["player"], kind=a["kind"], street=a["street"]) for a in self.actions],
                     shown=deepcopy(self.shown), board=self._board())
 
-    def _review_notes(self):
-        hero = [a for a in self.actions if a["player"] == 0]
-        notes = [f"本手你行动 {len(hero)} 次，净变化 {bb(self.state.payoffs[self.indices[0]])}。结果本身不代表决策质量。"]
-        for frame in self.frames:
-            if frame["current_actor"] == 0 and frame["legal"]["call_amount"] > 0:
+    def _review_notes(self, hand, seat):
+        hero = [a for a in hand["frames"][-1]["actions"] if a["player"] == seat]
+        notes = [f"本手你行动 {len(hero)} 次，净变化 {bb(hand['nets'][seat])}。结果本身不代表决策质量。"]
+        for frame in hand["frames"]:
+            if frame["current_actor"] == seat and frame["legal"]["call_amount"] > 0:
                 cost = frame["legal"]["call_amount"]
-                contributions = [self.start_stacks[p["id"]] - p["stack"] for p in frame["players"]]
-                cap = contributions[0] + cost
-                eligible = sum(min(cap, committed + (cost if seat == 0 else 0))
-                               for seat, committed in enumerate(contributions))
+                contributions = [hand["start_stacks"][p["id"]] - p["stack"] for p in frame["players"]]
+                cap = contributions[seat] + cost
+                eligible = sum(min(cap, committed + (cost if p == seat else 0))
+                               for p, committed in enumerate(contributions))
                 required = cost / eligible * 100
                 notes.append(f"{dict(preflop='翻牌前', flop='翻牌', turn='转牌', river='河牌').get(frame['street'], '')}的一次决定：跟注 {bb(cost)}，跟注后可争夺底池 {bb(eligible)}；若之后不再下注，需要约 {required:.1f}% 的胜率才能打平。这不是完整行动 EV。")
                 break
         notes.append("逐步回看只显示当时可见的信息；对手在实际亮牌后才公开底牌，弃牌与盖牌仍然保密。")
         return notes
 
-    def step_bot(self, version=None):
-        if version is not None and version != self.version:
-            raise ValueError("牌局已更新。")
-        seat = self.actor
-        if seat is None or seat == 0:
-            return self.snapshot()
-        from .bots import choose_action
-        decision = choose_action(self.observation(seat), PLAYERS[seat]["style"], self.bot_rngs[seat])
-        return self.act(seat, decision["action"], decision.get("amount"), version)
+    def _schedule_next(self):
+        """Anchor the next deadline once per transition; inspecting it never delays play."""
+        actor = self.actor
+        if self.closed or actor is None:
+            delay = None
+        elif self.players[actor]["kind"] == "human":
+            delay = self.turn_seconds
+        else:
+            human_remains = any(p["kind"] == "human" and seat not in self.folded
+                                for seat, p in enumerate(self.players))
+            delay = BOT_DELAY if human_remains else FAST_BOT_DELAY
+        self.due_at = None if delay is None else self.clock() + delay
+        self.changed.notify_all()
+        self.wake()
+
+    def next_due(self):
+        with self.lock:
+            return None if self.closed else self.due_at
+
+    def close(self):
+        with self.changed:
+            self.closed = True
+            self.due_at = None
+            self.changed.notify_all()
+            self.wake()
+
+    def run_due(self, now=None):
+        """Run at most one due action; clock injection makes pacing testable without sleep.
+
+        The policy receives a detached observation and RNG. Neither table nor registry
+        locks may be held by the caller while this method computes the decision.
+        """
+        with self.lock:
+            now = self.clock() if now is None else now
+            if self.closed or self.due_at is None or now < self.due_at:
+                return False
+            seat, version = self.actor, self.version
+            if self.players[seat]["kind"] == "human":
+                self.act(seat, "check_call" if self.legal()["can_check"] else "fold", version=version)
+                return True
+            if self._thinking_version == version:
+                return False
+            self._thinking_version = version
+            observation = self.observation(seat)
+            style = self.players[seat]["style"]
+            rng = random.Random(0)
+            rng.setstate(self.bot_rngs[seat].getstate())
+        try:
+            from .bots import choose_action
+            decision = choose_action(observation, style, rng)
+            with self.lock:
+                if self.closed or self.version != version:
+                    return False
+                self.act(seat, decision["action"], decision.get("amount"), version)
+                self.bot_rngs[seat].setstate(rng.getstate())
+                return True
+        except Exception:
+            with self.lock:
+                if not self.closed and self.version == version:
+                    self.due_at = self.clock() + BOT_DELAY
+            raise
+        finally:
+            with self.lock:
+                if self._thinking_version == version:
+                    self._thinking_version = None

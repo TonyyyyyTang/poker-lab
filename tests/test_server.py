@@ -3,23 +3,27 @@ import io
 import json
 import os
 import sys
+import threading
 import unittest
+from copy import deepcopy
 from http.client import HTTPMessage
 from http.cookies import SimpleCookie
 from unittest.mock import patch
 
-from poker_lab.game import Table
+from poker_lab.game import PLAYERS, Table
 from poker_lab import server
 
 
 class ServerTests(unittest.TestCase):
     def setUp(self):
         server.SESSIONS.clear()
+        server.TABLES.clear()
         self.now = 1000.0
         clock = patch.object(server.time, "monotonic", lambda: self.now)
         clock.start()
         self.addCleanup(clock.stop)
         self.addCleanup(server.SESSIONS.clear)
+        self.addCleanup(server.TABLES.clear)
 
     def request(self, method, path, payload=None, sid="test-session", headers=None):
         data = json.dumps(payload or {}).encode()
@@ -43,10 +47,10 @@ class ServerTests(unittest.TestCase):
         getattr(handler, "do_" + method)()
         return status[0], json.loads(handler.wfile.getvalue()), response_headers
 
-    def add_session(self, sid="test-session", seed=1):
-        table = Table(seed=seed)
-        with server.LOCK:
-            server._store_session(sid, table)
+    def add_session(self, sid="test-session", seed=1, table=None, seat=0):
+        table = table if table is not None else Table(seed=seed)
+        with server.REGISTRY_LOCK:
+            server._store_session(sid, server._register_table(table), seat)
         return table
 
     def fill_sessions(self):
@@ -60,18 +64,18 @@ class ServerTests(unittest.TestCase):
         status, state, _ = self.request("POST", "/api/reset", {})
         self.assertEqual(status, 200)
         self.assertGreater(state["version"], old_version)
-        before = server.SESSIONS["test-session"].table.snapshot()
-        status, _, _ = self.request("POST", "/api/step", {"version": old_version})
+        before = server.TABLES[server.SESSIONS["test-session"].table_id].view(0)
+        status, _, _ = self.request("POST", "/api/action", {"version": old_version})
         self.assertEqual(status, 409)
-        self.assertEqual(before, server.SESSIONS["test-session"].table.snapshot())
+        self.assertEqual(before, server.TABLES[server.SESSIONS["test-session"].table_id].view(0))
 
     def test_reconnect_resumes_same_hand_and_session_isolation(self):
         table = self.add_session(seed=2)
         table.act(table.actor, "check_call")
         status, state, _ = self.request("POST", "/api/session", {})
         self.assertEqual(status, 200)
-        self.assertEqual(state, table.snapshot())
-        status, _, _ = self.request("POST", "/api/step", {"version": table.version}, sid="unknown")
+        self.assertEqual(state, table.view(0))
+        status, _, _ = self.request("POST", "/api/action", {"version": table.version}, sid="unknown")
         self.assertEqual(status, 401)
 
     def test_same_origin_http_https_and_ports_are_accepted(self):
@@ -89,7 +93,7 @@ class ServerTests(unittest.TestCase):
             with self.subTest(origin=origin, host=host):
                 status, body, _ = self.request("POST", "/api/session", headers={"Origin": origin, "Host": host})
                 self.assertEqual(status, 200)
-                self.assertEqual(body, table.snapshot())
+                self.assertEqual(body, table.view(0))
 
     def test_foreign_or_malformed_origins_are_rejected(self):
         self.add_session()
@@ -142,11 +146,11 @@ class ServerTests(unittest.TestCase):
 
     def test_reset_at_capacity_replaces_one_session_without_evicting_another(self):
         self.fill_sessions()
-        previous = server.SESSIONS["session-0"].table
+        previous = server.TABLES[server.SESSIONS["session-0"].table_id]
         status, _, headers = self.request("POST", "/api/reset", sid="session-0")
         self.assertEqual(status, 200)
         self.assertEqual(set(server.SESSIONS), {f"session-{i}" for i in range(100)})
-        self.assertIsNot(server.SESSIONS["session-0"].table, previous)
+        self.assertIsNot(server.TABLES[server.SESSIONS["session-0"].table_id], previous)
         self.assertEqual(next(reversed(server.SESSIONS)), "session-0")
         self.assertNotIn("Set-Cookie", headers)
 
@@ -168,8 +172,8 @@ class ServerTests(unittest.TestCase):
             table.act(table.actor, "fold")
         for path in ("/api/state", "/api/history", "/api/hand/1"):
             with self.subTest(path=path):
-                with server.LOCK:
-                    server._store_session("test-session", table)
+                with server.REGISTRY_LOCK:
+                    server._store_session("test-session", server._register_table(table))
                 self.add_session("other-session")
                 self.now += 7199
                 status, _, _ = self.request("GET", path)
@@ -185,7 +189,8 @@ class ServerTests(unittest.TestCase):
         previous = self.add_session()
         previous.act(previous.actor, "check_call")
         server.SESSIONS.clear()
-        for method, path in (("GET", "/api/state"), ("POST", "/api/step")):
+        server.TABLES.clear()
+        for method, path in (("GET", "/api/state"), ("POST", "/api/action")):
             status, body, headers = self.request(method, path, {"version": previous.version})
             self.assertEqual(status, 401)
             self.assertIn("重新连接", body["error"])
@@ -194,10 +199,10 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         new_sid = SimpleCookie(headers["Set-Cookie"])["poker_session"].value
         self.assertNotEqual(new_sid, "test-session")
-        self.assertIsNot(server.SESSIONS[new_sid].table, previous)
+        self.assertIsNot(server.TABLES[server.SESSIONS[new_sid].table_id], previous)
         self.assertEqual(state["hand_id"], 1)
         self.assertFalse(state["complete"])
-        self.assertEqual(server.SESSIONS[new_sid].table.hands, [])
+        self.assertEqual(server.TABLES[server.SESSIONS[new_sid].table_id].hands, [])
         self.assertEqual(self.request("GET", "/api/state", sid=new_sid)[1], state)
 
     def test_health_check_has_no_session_or_cookie(self):
@@ -233,6 +238,196 @@ class ServerTests(unittest.TestCase):
                 http_server.assert_called_once_with(address, server.Handler)
                 http_server.return_value.serve_forever.assert_called_once_with()
                 http_server.return_value.server_close.assert_called_once_with()
+
+    def test_two_human_sessions_share_table_but_not_private_cards(self):
+        players = deepcopy(PLAYERS)
+        players[2].update(kind="human", name="Guest")
+        table = self.add_session(table=Table(seed=8, players=players))
+        self.add_session("guest", table=table, seat=2)
+        self.assertEqual(len(server.TABLES), 1)
+        self.assertEqual(self.request("POST", "/api/action", {"version": table.version, "action": "check_call"})[0], 409)
+        for sid, seat in (("guest", 2), ("test-session", 0)):
+            status, body, _ = self.request("GET", "/api/state", sid=sid)
+            self.assertEqual(status, 200)
+            self.assertEqual(set(body), {
+                "you", "hand_id", "version", "complete", "street", "board", "pot", "current_actor",
+                "dealer", "big_blind", "players", "legal", "actions", "summary", "session_net"})
+            self.assertEqual(body["you"], seat)
+            self.assertEqual(body["players"][seat]["cards"], table.holes[seat])
+            for player in body["players"]:
+                if player["id"] != seat:
+                    self.assertEqual(player["cards"], [])
+        status, _, _ = self.request("POST", "/api/action", {"version": table.version, "action": "check_call"}, sid="guest")
+        self.assertEqual(status, 200)
+        while table.actor != 0:
+            table.act(table.actor, "fold")
+        self.assertEqual(self.request("POST", "/api/action", {"version": table.version, "action": "fold"})[0], 200)
+        while table.state.status:
+            table.act(table.actor, "check_call")
+        for sid, seat in (("guest", 2), ("test-session", 0)):
+            status, replay, _ = self.request("GET", "/api/hand/1", sid=sid)
+            self.assertEqual(status, 200)
+            self.assertEqual(set(replay), {"hand_id", "frames", "summary", "notes", "net", "board"})
+            self.assertEqual(replay, table.hand(1, seat))
+            self.assertEqual(self.request("GET", "/api/history", sid=sid)[1], {"hands": table.history(seat)})
+        status, body, _ = self.request("POST", "/api/next", {"version": table.version}, sid="guest")
+        self.assertEqual(status, 200)
+        self.assertEqual((body["hand_id"], body["you"]), (2, 2))
+
+    def test_shared_table_dropped_only_after_last_session_expires(self):
+        players = deepcopy(PLAYERS)
+        players[3]["kind"] = "human"
+        table = self.add_session(table=Table(players=players))
+        table_id = server.SESSIONS["test-session"].table_id
+        self.now += 10
+        self.add_session("guest", table=table, seat=3)
+        self.now += 7191
+        self.request("GET", "/healthz", sid=None)
+        self.assertNotIn("test-session", server.SESSIONS)
+        self.assertIn(table_id, server.TABLES)
+        self.assertFalse(table.closed)
+        self.now += 10
+        self.request("GET", "/healthz", sid=None)
+        self.assertFalse(server.SESSIONS)
+        self.assertFalse(server.TABLES)
+        self.assertTrue(table.closed)
+        self.assertIsNone(table.next_due())
+        self.assertFalse(table.run_due())
+
+    def test_last_session_eviction_stops_table_and_step_endpoint_is_removed(self):
+        old = self.add_session()
+        for index in range(100):
+            self.now += 1
+            self.add_session(f"new-{index}")
+        self.assertTrue(old.closed)
+        self.assertIsNone(old.next_due())
+        self.assertEqual(len(server.TABLES), 100)
+        self.assertEqual(self.request("POST", "/api/step", {}, sid="new-99")[0], 404)
+
+    def test_long_poll_immediate_newer_version_and_timeout_contract(self):
+        table = self.add_session()
+        with patch.object(table.changed, "wait", side_effect=AssertionError("A newer version must not block")):
+            self.assertEqual(self.request("GET", "/api/state?after=0")[1], table.view(0))
+            self.assertEqual(self.request("GET", "/api/state")[1], table.view(0))
+
+        def timeout(predicate, timeout):
+            self.assertFalse(predicate())
+            self.assertEqual(timeout, 25)
+            return False
+
+        with patch.object(table.changed, "wait_for", side_effect=timeout) as wait:
+            self.assertEqual(self.request("GET", f"/api/state?after={table.version}")[1], table.view(0))
+            wait.assert_called_once()
+        for query in ("after=no", "after=", "after=-1", "after=1&after=2"):
+            self.assertEqual(self.request("GET", "/api/state?" + query)[0], 400)
+
+    def poll_during(self, table, change):
+        waiting = threading.Event()
+        result, errors = [], []
+        original_wait = table.changed.wait
+
+        def wait(timeout):
+            waiting.set()
+            return original_wait(timeout)
+
+        def poll():
+            try:
+                result.append(self.request("GET", f"/api/state?after={table.version}"))
+            except Exception as error:
+                errors.append(error)
+
+        with patch.object(table.changed, "wait", side_effect=wait):
+            worker = threading.Thread(target=poll, daemon=True)
+            worker.start()
+            try:
+                self.assertTrue(waiting.wait(2))
+                change()
+                worker.join(2)
+                self.assertFalse(worker.is_alive(), "Long poll did not wake")
+            finally:
+                if worker.is_alive():
+                    table.close()
+                    worker.join(2)
+        self.assertEqual(errors, [])
+        return result[0]
+
+    def test_long_poll_wakes_on_action_without_blocking_other_requests(self):
+        table = self.add_session()
+        previous = table.version
+
+        def change():
+            self.assertEqual(self.request("GET", "/healthz", sid=None)[0], 200)
+            table.act(table.actor, "check_call")
+
+        status, body, _ = self.poll_during(table, change)
+        self.assertEqual(status, 200)
+        self.assertGreater(body["version"], previous)
+        self.assertEqual(body, table.view(0))
+
+    def test_reset_wakes_poll_even_when_another_session_keeps_old_table(self):
+        players = deepcopy(PLAYERS)
+        players[3]["kind"] = "human"
+        table = self.add_session(table=Table(players=players))
+        self.add_session("guest", table=table, seat=3)
+        old_id = server.SESSIONS["guest"].table_id
+        old_version = table.version
+
+        def reset():
+            self.assertEqual(self.request("POST", "/api/reset")[0], 200)
+
+        status, body, _ = self.poll_during(table, reset)
+        self.assertEqual(status, 200)
+        self.assertGreater(body["version"], old_version)
+        self.assertEqual(body["you"], 0)
+        self.assertEqual(len(server.TABLES), 2)
+        self.assertIs(server.TABLES[old_id], table)
+        self.assertFalse(table.closed)
+        self.assertEqual(self.request("GET", "/api/state", sid="guest")[1], table.view(3))
+
+    def test_expiry_wakes_poll_and_directly_closed_table_returns_401(self):
+        table = self.add_session()
+
+        def expire():
+            self.now += 7201
+            self.request("GET", "/healthz", sid=None)
+
+        self.assertEqual(self.poll_during(table, expire)[0], 401)
+        table = self.add_session()
+        table.close()
+        self.assertEqual(self.request("GET", "/api/state")[0], 401)
+        self.assertFalse(server.TABLES)
+
+    def test_driver_thinks_outside_registry_and_table_locks(self):
+        table = self.add_session()
+        self.now = table.next_due()
+        entered, release = threading.Event(), threading.Event()
+
+        def think(*args):
+            entered.set()
+            if not release.wait(2):
+                raise AssertionError("Policy was not released")
+            return {"action": "fold"}
+
+        with patch("poker_lab.bots.choose_action", side_effect=think):
+            worker = threading.Thread(target=server.drive_tables)
+            worker.start()
+            try:
+                self.assertTrue(entered.wait(2))
+                self.assertTrue(server.REGISTRY_LOCK.acquire(timeout=1))
+                try:
+                    self.assertEqual(self.request("GET", "/healthz", sid=None)[0], 200)
+                    self.assertTrue(table.lock.acquire(timeout=1))
+                    table.lock.release()
+                    server._drop_session("test-session")
+                finally:
+                    server.REGISTRY_LOCK.release()
+            finally:
+                release.set()
+                worker.join(2)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(table.actions, [])
+        self.assertTrue(table.closed)
+        self.assertFalse(server.TABLES)
 
 
 if __name__ == "__main__":

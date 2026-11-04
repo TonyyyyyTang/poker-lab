@@ -48,7 +48,7 @@ class TableTests(unittest.TestCase):
 
     def assert_unique_cards(self, table):
         cards = [card for hand in table.holes.values() for card in hand]
-        cards.extend(table.snapshot()["board"])
+        cards.extend(table.view(0)["board"])
         self.assertEqual(len(cards), len(set(cards)))
 
     def test_six_seat_order_blinds_and_button_rotation(self):
@@ -61,7 +61,7 @@ class TableTests(unittest.TestCase):
             order.append(table.actor)
             table.act(table.actor, "check_call")
         self.assertEqual(order, [2, 3, 4, 5, 0, 1])
-        self.assertEqual(table.snapshot()["street"], "flop")
+        self.assertEqual(table.view(0)["street"], "flop")
         self.assertEqual(table.actor, 0)
         finish_by_calling(table)
         closing_stacks = table.stacks.copy()
@@ -85,11 +85,11 @@ class TableTests(unittest.TestCase):
         ]
         for seat, action, amount, version in invalid:
             with self.subTest(action=action, amount=amount, seat=seat, version=version):
-                before = deepcopy((table.snapshot(), table.frames, table.action_trace,
+                before = deepcopy((table.view(0), table.frames, table.action_trace,
                                    table.state.operations))
                 with self.assertRaises(ValueError):
                     table.act(seat, action, amount, version)
-                self.assertEqual(before, (table.snapshot(), table.frames, table.action_trace,
+                self.assertEqual(before, (table.view(0), table.frames, table.action_trace,
                                           table.state.operations))
         with self.assertRaises(ValueError):
             table.new_hand()
@@ -113,12 +113,12 @@ class TableTests(unittest.TestCase):
         self.assertEqual(table.actor, 2)
         self.assertEqual(table.legal()["call_amount"], 5)
         self.assertFalse(table.legal()["can_raise"])
-        before = table.snapshot()
+        before = table.view(0)
         with self.assertRaises(ValueError):
             table.act(2, "raise", 23)
-        self.assertEqual(before, table.snapshot())
+        self.assertEqual(before, table.view(0))
         table.act(2, "check_call")
-        self.assertEqual(table.snapshot()["street"], "flop")
+        self.assertEqual(table.view(0)["street"], "flop")
         finish_by_calling(table)
         self.assert_conserved(table)
 
@@ -130,9 +130,9 @@ class TableTests(unittest.TestCase):
         for seat in [5, 0, 1]:
             table.act(seat, "fold")
         self.assertFalse(table.state.status)
-        self.assertEqual(table.snapshot()["board"], ["2c", "3d", "4h", "7s", "9c"])
+        self.assertEqual(table.view(0)["board"], ["2c", "3d", "4h", "7s", "9c"])
         self.assertEqual(table.stacks, [199, 198, 63, 60, 50, 200])
-        self.assertEqual([p["net"] for p in table.snapshot()["players"]],
+        self.assertEqual([p["net"] for p in table.view(0)["players"]],
                          [-1, -2, 43, 10, -50, 0])
         self.assertEqual(len(table.hands), 1)
         self.assertTrue(table.hands[0]["frames"][-1]["complete"])
@@ -152,12 +152,12 @@ class TableTests(unittest.TestCase):
             self.assertEqual(table.holes, original_holes)
             self.assertEqual(table.actions, [])
         first_frame = deepcopy(table.frames[0])
-        self.assertEqual(first_frame["players"][0]["cards"], original_holes[0])
+        self.assertEqual(first_frame["players"][0]["cards"], [])
         self.assertTrue(all(not p["cards"] for p in first_frame["players"][1:]))
         for seat in [2, 3, 4, 5, 0]:
             table.act(seat, "fold")
         self.assertFalse(table.state.status)
-        self.assertEqual(table.snapshot()["players"][0]["cards"], original_holes[0])
+        self.assertEqual(table.view(0)["players"][0]["cards"], original_holes[0])
         self.assertEqual(table.frames[0], first_frame)
         for frame in table.hands[0]["frames"]:
             for seat in [2, 3, 4, 5]:
@@ -176,7 +176,7 @@ class TableTests(unittest.TestCase):
         self.assertEqual(table.observation(0)["eligible_pot_after_call"], 62)
         table.act(0, "check_call")
         finish_by_calling(table)
-        notes = " ".join(table.hands[-1]["notes"])
+        notes = " ".join(table.hand(table.hand_id, 0)["notes"])
         self.assertIn("30.6%", notes)  # 19 / (20 + 20 + 20 + dead big blind 2)
         self.assertNotIn("8.6%", notes)
 
@@ -198,7 +198,7 @@ class TableTests(unittest.TestCase):
         rng = random.Random(9)
         for _ in range(5):
             for _ in range(200):
-                self.assertEqual(first.snapshot(), second.snapshot())
+                self.assertEqual(first.view(0), second.view(0))
                 if not first.state.status:
                     break
                 seat = first.actor
@@ -243,8 +243,8 @@ class TableTests(unittest.TestCase):
                             table.act(table.actor, "check_call")
                     else:
                         self.fail("Hand did not complete within 200 actions")
-                    self.assertTrue(table.snapshot()["complete"])
-                    self.assertEqual(sum(p["net"] for p in table.snapshot()["players"]), 0)
+                    self.assertTrue(table.view(0)["complete"])
+                    self.assertEqual(sum(p["net"] for p in table.view(0)["players"]), 0)
                     self.assertEqual(len(table.hands), hand + 1)
                     if hand < 9:
                         table.new_hand()
