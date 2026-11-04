@@ -47,11 +47,22 @@ Evaluate policy changes across multiple seeds and seats. Distinguish gameplay pl
 
 On 4 November 2026 the owner authorised the first playable version: a friendly six-seat, 100 BB cash-style table, three distinct opponent archetypes, and post-hand replay. Implement and verify that local experience. Use established frameworks where useful. The owner has also authorised a public GitHub repository and collaboration with Claude Code. Paid model calls inside the game remain outside the current implementation scope.
 
+Later on 4 November 2026 the owner authorised the path in `docs/ROADMAP.md`: public hosting, private multiplayer tables joined by invite link, adaptive bots that learn from public observations, and decision-quality review. Constraints:
+
+- Free hosting tier for now; no paid infrastructure without the owner's approval.
+- No user accounts for now. Players join with a guest name from an invite link.
+- Play money only. No real-money stakes, settlement or "who owes whom" ledgers.
+- Private invite tables and solo play against bots. No public lobby or matchmaking with strangers.
+- The owner creates and controls hosting accounts and credentials; agents never handle them.
+
 ## Shared work with Codex and Claude Code
 
 - Use this file as the common project guidance. `CLAUDE.md` imports it.
 - Read `docs/COLLABORATION.md` for setup and the short handoff format.
-- Give concurrent editing tasks separate branches and worktrees. Do not switch branches or modify another agent's active checkout.
+- Split work by area so the agents rarely touch the same files. Codex owns the engine adapter, server and API, persistence, hosting, bot plumbing and the simulation harness. Claude owns `web/` and the analysis layer (range equity, decision EV, opponent modelling, solvers). Each reviews the other's branches.
+- Codex works on `codex/<task>` branches, Claude on `claude/<task>`, both from `main`, one task per branch and worktree. Do not switch branches or modify another agent's active checkout.
+- Task specs live in `docs/tasks/<task>.md`. When a task spans both areas, the spec fixes the JSON contract first and the backend side lands first.
+- The owner merges into `main` and pushes. Agents do not merge or push to `main` unless the owner asks for that specific change.
 - Keep each change focused. The implementing agent reports its commit, changed behaviour and test results; the reviewing agent inspects the diff and runs relevant checks.
 - Use the code and committed documents as shared context; another tool does not automatically receive this chat's history.
 - Keep local agent settings, worktrees and private context out of commits.

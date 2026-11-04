@@ -46,6 +46,7 @@ Tests cover the adapter's legal-action boundaries, short all-ins, side pots, rep
 
 - [Working instructions](AGENTS.md)
 - [Product brief](docs/PROJECT_BRIEF.md)
+- [Roadmap](docs/ROADMAP.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Working with Codex and Claude Code](docs/COLLABORATION.md)
 - [PokerKit](https://github.com/uoftcprg/pokerkit), MIT-licensed rules engine ([documentation](https://pokerkit.readthedocs.io/en/stable/))
