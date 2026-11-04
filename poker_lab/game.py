@@ -15,6 +15,7 @@ ENGINE_VERSION = "pokerkit-0.7.4/adapter-1"
 HAND_HISTORY_LIMIT = 20
 BOT_DELAY = 0.85
 FAST_BOT_DELAY = 0.2
+AUTO_DEAL_SECONDS = 5
 PLAYERS = [
     dict(kind="human", name="你", style="", avatar="你", color="#b7874c"),
     dict(kind="bot", name="阿岚", style="tight", avatar="岚", color="#78988c"),
@@ -40,7 +41,7 @@ def bb(amount):
 
 class Table:
     def __init__(self, seed=None, stacks=None, dealer=5, players=None,
-                 turn_seconds=None, clock=None, version=0):
+                 turn_seconds=None, clock=None, version=0, shared=False, invite=None):
         self.lock = threading.RLock()
         self.changed = threading.Condition(self.lock)
         self.clock = clock or time.monotonic
@@ -48,6 +49,11 @@ class Table:
         self.wake = lambda: None
         self._thinking_version = None
         self.due_at = None
+        self.shared = shared
+        self.invite = invite if shared else None
+        self.pending = {}
+        self.timeouts = [0] * 6
+        self.first_hand = [1] * 6
         self.players = deepcopy(PLAYERS)
         if players is not None:
             if len(players) != 6:
@@ -61,9 +67,16 @@ class Table:
                 player["style"] = ""
             elif player["style"] not in ("tight", "calling", "bold"):
                 raise ValueError("未知的对手风格。")
+            player.update(away=False, leaving=False)
+        # Seat zero starts human, so it needs a regular of its own when vacated.
+        self.bots = deepcopy(PLAYERS)
+        self.bots[0].update(kind="bot", name="阿禾", style="tight", avatar="禾")
+        for seat, player in enumerate(self.players):
+            if player["kind"] == "bot":
+                self.bots[seat] = deepcopy(player)
         if turn_seconds is not None and turn_seconds <= 0:
             raise ValueError("行动时间必须大于零。")
-        self.turn_seconds = turn_seconds
+        self.turn_seconds = 30 if shared else turn_seconds
         self.seed = secrets.randbits(128) if seed is None else seed
         self.stacks = list(stacks or [200] * 6)
         self.dealer = (dealer - 1) % 6
@@ -73,6 +86,81 @@ class Table:
         self.hands = []
         self.opponent_stats = OpponentStats()
         self.new_hand()
+
+    def has_human(self, seat):
+        with self.lock:
+            return seat in self.pending or (self.players[seat]["kind"] == "human"
+                                            and not self.players[seat]["leaving"])
+
+    def _notify(self):
+        self.changed.notify_all()
+        self.wake()
+
+    def join(self, name):
+        """Reserve a bot seat; its current hand still belongs to the bot."""
+        with self.changed:
+            if self.closed or not self.shared:
+                raise ValueError("牌桌已关闭。")
+            seat = next((seat for seat, player in enumerate(self.players)
+                         if player["kind"] == "bot" and seat not in self.pending), None)
+            if seat is None:
+                raise ValueError("这张桌已经坐满了。")
+            names = {p["name"] for p in self.players if p["kind"] == "human"}
+            names.update(p["name"] for p in self.pending.values())
+            base, suffix = name, 2
+            while name in names:
+                name = f"{base} {suffix}"
+                suffix += 1
+            player = deepcopy(self.players[seat])
+            player.update(kind="human", name=name, style="", avatar=name[0], away=False, leaving=False)
+            self.pending[seat] = player
+            self.version += 1
+            self._notify()
+            return seat
+
+    def leave(self, seat):
+        with self.changed:
+            if seat in self.pending:
+                del self.pending[seat]
+            elif self.players[seat]["kind"] == "human" and not self.players[seat]["leaving"]:
+                self.players[seat]["leaving"] = True
+            else:
+                return
+            self.version += 1
+            if seat == self.actor and self.players[seat]["leaving"]:
+                self._schedule_next()
+            else:
+                self._notify()
+
+    def back(self, seat):
+        with self.changed:
+            if self.closed or seat in self.pending or not self.has_human(seat):
+                raise ValueError("此座位尚未入座或已经离开。")
+            was_away = self.players[seat]["away"]
+            self.players[seat]["away"] = False
+            self.timeouts[seat] = 0
+            self.version += 1
+            if was_away and seat == self.actor:
+                self._schedule_next()
+            else:
+                self._notify()
+            return self.view(seat)
+
+    def _change_occupants(self):
+        """Apply ownership changes only between hands, after old reads are recorded."""
+        for seat, player in enumerate(self.players):
+            replacement = self.pending.pop(seat, None)
+            if replacement is None and player["leaving"]:
+                replacement = deepcopy(self.bots[seat])
+            if replacement is None:
+                continue
+            replacement.update(away=False, leaving=False)
+            self.players[seat] = replacement
+            self.stacks[seat] = 200
+            self.session_net[seat] = 0
+            self.timeouts[seat] = 0
+            self.first_hand[seat] = self.hand_id + 1
+            self.opponent_stats.counts[seat] = {stat: [0, 0] for stat in self.opponent_stats.counts[seat]}
 
     def new_hand(self):
         with self.changed:
@@ -84,6 +172,7 @@ class Table:
     def _new_hand(self):
         if self.hand_id and self.state.status:
             raise ValueError("这手牌还没结束。")
+        self._change_occupants()
         rebuys = []
         for seat, amount in enumerate(self.stacks):
             if amount < 2:
@@ -186,27 +275,40 @@ class Table:
                     session_net=self.session_net.copy())
 
     @staticmethod
-    def _project(frame, seat, hole):
+    def _project(frame, seat, hole, pending=False):
         view = deepcopy(frame)
         view["you"] = seat
-        view["players"][seat]["cards"] = hole.copy()
-        view["session_net"] = frame["session_net"][seat]
-        if frame["current_actor"] != seat:
+        view["pending"] = pending
+        if not pending:
+            view["players"][seat]["cards"] = hole.copy()
+        view["session_net"] = 0 if pending else frame["session_net"][seat]
+        if pending or frame["current_actor"] != seat:
             view["legal"] = dict(can_fold=False, can_check=False, call_amount=0,
                                  can_raise=False, min_raise_to=0, max_raise_to=0)
         return view
 
     def view(self, seat):
         with self.lock:
-            return self._project(self._public_frame(), seat, self.holes[seat])
+            view = self._project(self._public_frame(), seat, self.holes[seat], seat in self.pending)
+            remaining = None if self.due_at is None else max(0, self.due_at - self.clock())
+            view.update(table=dict(shared=self.shared, invite=self.invite),
+                        turn_remaining=remaining if self.shared and self.actor is not None
+                        and self.players[self.actor]["kind"] == "human" else None,
+                        next_hand_in=remaining if self.shared and not self.state.status else None)
+            return view
 
     def history(self, seat):
         with self.lock:
+            if seat in self.pending:
+                return []
             return [dict(hand_id=h["hand_id"], summary=h["summary"], net=h["nets"][seat],
-                         board=h["board"].copy()) for h in reversed(self.hands)]
+                         board=h["board"].copy()) for h in reversed(self.hands)
+                    if h["hand_id"] >= self.first_hand[seat]]
 
     def hand(self, hand_id, seat):
         with self.lock:
+            if seat in self.pending or hand_id < self.first_hand[seat]:
+                return None
             hand = next((h for h in self.hands if h["hand_id"] == hand_id), None)
             if hand is None:
                 return None
@@ -221,11 +323,11 @@ class Table:
         with self.changed:
             if self.closed:
                 raise ValueError("牌桌已关闭。")
-            result = self._act(seat, action, amount, version)
+            self._act(seat, action, amount, version)
             self._schedule_next()
-            return result
+            return self.view(seat)
 
-    def _act(self, seat, action, amount=None, version=None):
+    def _act(self, seat, action, amount=None, version=None, automatic=False):
         if version is not None and version != self.version:
             raise ValueError("牌局已更新，请按当前局面操作。")
         if not self.state.status or seat != self.actor:
@@ -254,6 +356,9 @@ class Table:
             label = "加注至 " + bb(amount)
         else:
             raise ValueError("未知操作。")
+        if not automatic and self.players[seat]["kind"] == "human" and not self.players[seat]["leaving"]:
+            self.players[seat]["away"] = False
+            self.timeouts[seat] = 0
         if s.stacks[self.indices[seat]] == 0 and seat not in self.folded:
             label += " · 全下"
         self.last_actions[seat] = label
@@ -264,7 +369,6 @@ class Table:
         self._collect_reveals(old_count)
         self._record()
         self._advance()
-        return self.view(seat)
 
     def _collect_reveals(self, start):
         for op in self.state.operations[start:]:
@@ -325,17 +429,18 @@ class Table:
     def _schedule_next(self):
         """Anchor the next deadline once per transition; inspecting it never delays play."""
         actor = self.actor
-        if self.closed or actor is None:
+        if self.closed:
             delay = None
+        elif actor is None:
+            delay = AUTO_DEAL_SECONDS if self.shared and not self.state.status else None
         elif self.players[actor]["kind"] == "human":
-            delay = self.turn_seconds
+            delay = 0 if self.players[actor]["away"] or self.players[actor]["leaving"] else self.turn_seconds
         else:
             human_remains = any(p["kind"] == "human" and seat not in self.folded
                                 for seat, p in enumerate(self.players))
             delay = BOT_DELAY if human_remains else FAST_BOT_DELAY
         self.due_at = None if delay is None else self.clock() + delay
-        self.changed.notify_all()
-        self.wake()
+        self._notify()
 
     def next_due(self):
         with self.lock:
@@ -358,9 +463,18 @@ class Table:
             now = self.clock() if now is None else now
             if self.closed or self.due_at is None or now < self.due_at:
                 return False
+            if not self.state.status:
+                self.new_hand()
+                return True
             seat, version = self.actor, self.version
             if self.players[seat]["kind"] == "human":
-                self.act(seat, "check_call" if self.legal()["can_check"] else "fold", version=version)
+                player = self.players[seat]
+                if not player["leaving"] and not player["away"]:
+                    self.timeouts[seat] += 1
+                    player["away"] = self.timeouts[seat] >= 2
+                self._act(seat, "check_call" if self.legal()["can_check"] else "fold",
+                          version=version, automatic=True)
+                self._schedule_next()
                 return True
             if self._thinking_version == version:
                 return False

@@ -251,7 +251,8 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertEqual(set(body), {
                 "you", "hand_id", "version", "complete", "street", "board", "pot", "current_actor",
-                "dealer", "big_blind", "players", "legal", "actions", "summary", "session_net"})
+                "dealer", "big_blind", "players", "legal", "actions", "summary", "session_net",
+                "table", "pending", "turn_remaining", "next_hand_in"})
             self.assertEqual(body["you"], seat)
             self.assertEqual(body["players"][seat]["cards"], table.holes[seat])
             for player in body["players"]:

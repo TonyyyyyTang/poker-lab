@@ -1,6 +1,6 @@
 # Architecture
 
-Status: public solo table live on Render's free tier, with adaptive bots; server-driven backend prepared for review on 4 November 2026. The matching live client must land before deployment. The design below includes later extensions, identified as proposals.
+Status: public solo table with adaptive bots and server-driven play; invite-table backend prepared for review on 4 November 2026. The matching invite client must land before deployment. The design below includes later extensions, identified as proposals.
 
 ## Implemented slice
 
@@ -13,11 +13,17 @@ Status: public solo table live on Render's free tier, with adaptive bots; server
 
 Sessions and each table's last 20 completed hands are held in process memory. The server keeps at most 100 sessions, evicting the least recently used when full. Sessions idle for more than two hours are removed by the scheduler, API requests or health checks. Reloading a page resumes via its cookie; restarting the service clears them. No database is used. The solo table is deployed on Render's free tier at https://poker-lab.onrender.com. Replay is visual history, not a branchable simulator yet. A deterministic seed and action trace exist inside each Table for verification, but are not sent through the public API.
 
-A session binds a browser to a table ID and a physical seat. Several sessions can refer to one table internally; the HTTP API still creates only solo tables. Losing the last session closes the table, cancels its deadline and wakes waiting requests. Registry operations use a short registry lock; table state uses its own lock and condition. Bot computation uses a copied observation and RNG outside both locks, then commits only if the table version still matches. Discarded work does not advance the live RNG.
+A session binds a browser to a table ID and a physical seat. `POST /api/tables` creates a shared table with an opaque invite code; `/api/join` reserves the lowest available bot seat, and `/t/<code>` serves the same client page. Joining without a cookie creates a session. Existing cookies resume their seat without another reservation. Guest names are validated at the HTTP boundary and made unique among seated and pending humans. Failed joins preserve the previous binding.
+
+Registry operations reserve and replace bindings atomically. Losing a seat's last session cancels its pending reservation or marks its human as leaving; losing the table's last session closes it, cancels its deadline and wakes waiting requests. Registry operations acquire the registry lock before table locks. When a browser switches tables, the destination version advances past its previous table's version so delayed responses cannot restore the old view. Bot computation uses a copied observation and RNG outside both locks, then commits only if the table version still matches. Discarded work does not advance the live RNG. The single scheduler still computes bot decisions sequentially across tables.
 
 Bots are scheduled 0.85 seconds after each transition, or 0.2 seconds once all human seats have folded (or none are seated). Human deadlines are disabled by default; an enabled deadline checks for free or folds. `GET /api/state?after=N` waits on the table condition for a newer version or 25 seconds. `/api/step` has been removed. Replay storage contains public frames plus separate private hole-card storage; response projection adds only the requesting seat's own cards and selects its historical legal actions and session net.
 
-PokerKit is MIT licensed and was selected after checking its documented full betting/settlement model. Its API is pinned and tested at 0.7.4. Each browser session is a solo table; multiplayer is a later phase.
+Shared tables give humans 30 seconds per turn and automatically deal five seconds after settlement; a seated human can deal sooner. Two consecutive timeouts mark a player away, making subsequent turns check or fold immediately. A manual action or `/api/back` clears away. `/api/leave` moves the browser to a fresh solo table and makes the departing seat check or fold when its turn arrives.
+
+Seat changes take effect at the next deal. Pending joiners receive public views without the current bot's private cards, legal actions or history. A new occupant starts with 100 BB, zero session net, fresh opponent counts and a history boundary excluding all prior occupants' hands. Other occupants retain their histories and reads. Departing seats return to their original bot; host seat zero uses the fictional tight regular 阿禾 because it originally had no bot. Solo play keeps manual dealing and no turn timer.
+
+PokerKit is MIT licensed and was selected after checking its documented full betting/settlement model. Its API is pinned and tested at 0.7.4. Tables are private and invite-only, with no public listing or accounts.
 
 ## Core flow
 

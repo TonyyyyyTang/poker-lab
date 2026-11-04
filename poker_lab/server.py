@@ -1,5 +1,7 @@
 """HTTP sessions, long polling and server-driven tables. PokerKit is authoritative."""
 from collections import OrderedDict
+from contextlib import nullcontext
+from copy import deepcopy
 from dataclasses import dataclass
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -8,12 +10,14 @@ import json
 import mimetypes
 import os
 from pathlib import Path
+import re
 import secrets
 import threading
 import time
+import unicodedata
 from urllib.parse import parse_qs, urlsplit
 
-from .game import HAND_HISTORY_LIMIT, Table
+from .game import HAND_HISTORY_LIMIT, PLAYERS, Table
 
 ROOT = Path(__file__).resolve().parent.parent
 MAX_SESSIONS = 100
@@ -37,14 +41,17 @@ TABLES: dict[str, Table] = {}
 
 def _retire_binding(session):
     """Registry helpers hold REGISTRY_LOCK; never acquire it while holding a table lock."""
-    session.active = False
     table = TABLES[session.table_id]
-    if not any(s.table_id == session.table_id for s in SESSIONS.values()):
-        del TABLES[session.table_id]
-        table.close()
-    else:
-        # A reset/eviction must also wake polls on a table still used by other seats.
-        with table.changed:
+    with table.changed:
+        session.active = False
+        remaining = [s for s in SESSIONS.values() if s.table_id == session.table_id]
+        if not remaining:
+            del TABLES[session.table_id]
+            table.close()
+        else:
+            if not table.closed and not any(s.seat == session.seat for s in remaining):
+                table.leave(session.seat)
+            # A reset/eviction must also wake polls on a table still used by other seats.
             table.changed.notify_all()
     WAKE.set()
 
@@ -68,16 +75,18 @@ def _register_table(table):
         if registered is table:
             return table_id
     table_id = secrets.token_urlsafe(24)
+    while table_id in TABLES or table_id == table.invite:
+        table_id = secrets.token_urlsafe(24)
     table.wake = WAKE.set
     TABLES[table_id] = table
     return table_id
 
 
 def _store_session(sid, table_id, seat=0):
+    # Callers expire sessions before selecting/reserving a destination table.
     now = time.monotonic()
-    _expire_sessions(now)
     table = TABLES[table_id]
-    if type(seat) is not int or not 0 <= seat < 6 or table.closed or table.players[seat]["kind"] != "human":
+    if type(seat) is not int or not 0 <= seat < 6 or table.closed or not table.has_human(seat):
         raise ValueError("会话必须对应一个玩家座位。")
     previous = SESSIONS.get(sid)
     session = Session(table_id, seat, now)
@@ -89,6 +98,78 @@ def _store_session(sid, table_id, seat=0):
         _drop_session(next(iter(SESSIONS)))
     WAKE.set()
     return session
+
+
+def guest_name(value):
+    if not isinstance(value, str) or any(unicodedata.category(c) in ("Cc", "Cf", "Cs") for c in value):
+        raise ValueError("名字须为 1–12 个字符，不能包含控制字符。")
+    name = value.strip()
+    if not 1 <= len(name) <= 12:
+        raise ValueError("名字须为 1–12 个字符，不能包含控制字符。")
+    return name
+
+
+def bind_session(sid, path, payload):
+    """Atomically reserve a seat and replace a cookie's binding; return detached JSON.
+
+    Only registry operations acquire multiple table locks, always after REGISTRY_LOCK.
+    Holding the source lock until replacement prevents its last action from producing
+    a newer response than the destination's first view.
+    """
+    with REGISTRY_LOCK:
+        now = time.monotonic()
+        _expire_sessions(now)
+        session = SESSIONS.get(sid)
+        if session is not None and TABLES[session.table_id].closed:
+            _drop_session(sid)
+            session = None
+        if session is None and path in ("/api/reset", "/api/leave"):
+            return 401, {"error": "牌桌已过期或服务已重启，请重新连接开始新的一场。"}, None
+        source = TABLES[session.table_id] if session else None
+        with source.lock if source else nullcontext():
+            if session:
+                session.last_seen = now
+                SESSIONS.move_to_end(sid)
+            if path == "/api/session" and session:
+                return 200, source.view(session.seat), sid
+            if path == "/api/join":
+                code = payload.get("code")
+                target = next((t for t in TABLES.values()
+                               if t.shared and t.invite == code and not t.closed), None)
+                if target is None:
+                    return 404, {"error": "找不到这张牌桌，邀请链接可能已过期。"}, None
+                if source is target:
+                    return 200, target.view(session.seat), None
+                try:
+                    name = guest_name(payload.get("name"))
+                except ValueError as exc:
+                    return 400, {"error": str(exc)}, None
+                with target.changed:
+                    try:
+                        seat = target.join(name)
+                    except ValueError as exc:
+                        return 409, {"error": str(exc)}, None
+                    # Versions must stay monotonic for this browser across table switches.
+                    if source:
+                        target.version = max(target.version, source.version + 1)
+                    cookie = None if session else secrets.token_urlsafe(32)
+                    _store_session(sid if session else cookie, _register_table(target), seat)
+                    target.changed.notify_all()
+                    return 200, target.view(seat), cookie
+            options = {"version": source.version if source else 0}
+            if path == "/api/tables":
+                invite = secrets.token_urlsafe(8)
+                while invite in TABLES or any(t.invite == invite for t in TABLES.values()):
+                    invite = secrets.token_urlsafe(8)
+                players = deepcopy(PLAYERS)
+                if source:
+                    player = source.pending.get(session.seat, source.players[session.seat])
+                    players[0].update(name=player["name"], avatar=player["name"][0])
+                options.update(shared=True, invite=invite, players=players)
+            fresh = Table(**options)
+            cookie = None if session else secrets.token_urlsafe(32)
+            _store_session(sid if session else cookie, _register_table(fresh))
+            return 200, fresh.view(0), cookie
 
 
 def _resolve_session(sid):
@@ -230,6 +311,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(status, body)
         # An explicit allowlist keeps private files and source code off the web server.
         files = {"/": "index.html", "/index.html": "index.html", "/style.css": "style.css", "/app.js": "app.js"}
+        if re.fullmatch(r"/t/[A-Za-z0-9_-]+", path):
+            files[path] = "index.html"
         if path not in files:
             return self.reply(404, {"error": "Not found"})
         file = ROOT / "web" / files[path]
@@ -250,7 +333,8 @@ class Handler(BaseHTTPRequestHandler):
         if origin is not None and not same_origin_host(origin, self.headers.get("Host")):
             return self.reply(403, {"error": "仅接受当前站点牌桌的操作。"})
         path = urlsplit(self.path).path
-        if path not in ("/api/session", "/api/reset", "/api/action", "/api/next"):
+        if path not in ("/api/session", "/api/reset", "/api/action", "/api/next",
+                        "/api/tables", "/api/join", "/api/leave", "/api/back"):
             return self.reply(404, {"error": "接口不存在。"})
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -262,48 +346,30 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, json.JSONDecodeError):
             return self.reply(400, {"error": "请求格式错误。"})
         sid = self.session_id()
+        if path in ("/api/session", "/api/reset", "/api/tables", "/api/join", "/api/leave"):
+            status, body, cookie = bind_session(sid, path, payload)
+            return self.reply(status, body, cookie=cookie)
         binding = _resolve_session(sid)
-        if path == "/api/session":
-            if binding is None:
-                table = Table()
-                sid = secrets.token_urlsafe(32)
-                with REGISTRY_LOCK:
-                    session = _store_session(sid, _register_table(table))
-                binding = session, table
-            session, table = binding
-            with table.lock:
-                if not session.active or table.closed:
-                    body = None
-                else:
-                    body = table.view(session.seat)
-            return self.reply(200, body, cookie=sid) if body is not None else self.session_expired()
         if binding is None:
             return self.session_expired()
         session, table = binding
-        if path == "/api/reset":
-            with REGISTRY_LOCK:
-                if SESSIONS.get(sid) is not session:
-                    body = None
-                else:
-                    with table.lock:
-                        fresh = Table(version=table.version)
-                        _store_session(sid, _register_table(fresh))
-                        body = fresh.view(0)
-            return self.reply(200, body) if body is not None else self.session_expired()
         with table.lock:
             if not session.active or table.closed:
                 status, body = 401, {"error": "牌桌已过期或服务已重启，请重新连接开始新的一场。"}
             else:
                 try:
-                    if table.players[session.seat]["kind"] != "human":
+                    if not table.has_human(session.seat) or session.seat in table.pending:
                         raise ValueError("此座位由对手控制。")
-                    version = payload.get("version")
-                    if type(version) is not int or version != table.version:
-                        raise ValueError("牌局已更新，请重试当前操作。")
-                    if path == "/api/action":
-                        table.act(session.seat, payload.get("action"), payload.get("amount"), version)
+                    if path == "/api/back":
+                        table.back(session.seat)
                     else:
-                        table.new_hand()
+                        version = payload.get("version")
+                        if type(version) is not int or version != table.version:
+                            raise ValueError("牌局已更新，请重试当前操作。")
+                        if path == "/api/action":
+                            table.act(session.seat, payload.get("action"), payload.get("amount"), version)
+                        else:
+                            table.new_hand()
                     status, body = 200, table.view(session.seat)
                 except ValueError as exc:
                     status, body = 409, {"error": str(exc)}
