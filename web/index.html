@@ -10,105 +10,106 @@
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="/" aria-label="Poker Lab 首页">
+    <a class="brand" href="/" data-i18n-aria="brandAria">
       <span class="brand-mark">♠</span>
       <span>Poker <i>Lab</i></span>
-      <small>德州训练场</small>
+      <small data-i18n="brandSub">德州训练场</small>
     </a>
-    <div class="room-label"><span class="live-dot"></span> 朋友局 <span class="room-divider">/</span> 六人桌</div>
+    <div class="room-label"><span class="live-dot"></span> <span data-i18n="room">朋友局</span> <span class="room-divider">/</span> <span data-i18n="roomSize">六人桌</span></div>
     <div class="topbar-actions">
-      <button class="icon-button invite-button" id="invite-button" type="button" aria-label="邀请朋友"><span aria-hidden="true">＋</span> 邀请朋友</button>
-      <button class="icon-button history-button" id="history-button" type="button"><span aria-hidden="true">↺</span> 牌局记录</button>
+      <button class="icon-button invite-button" id="invite-button" type="button" data-i18n-aria="invite"><span aria-hidden="true">+</span> <i data-i18n="invite">邀请朋友</i></button>
+      <button class="icon-button history-button" id="history-button" type="button" data-i18n-aria="history"><span aria-hidden="true">↺</span> <i data-i18n="history">牌局记录</i></button>
+      <button class="icon-button lang-button" id="lang-button" type="button" data-i18n="langSwitch" data-i18n-aria="langAria">EN</button>
     </div>
   </header>
 
   <main class="workspace">
-    <section class="game-column" aria-label="德州扑克牌桌">
+    <section class="game-column" data-i18n-aria="tableAria">
       <div class="table-heading">
         <div>
-          <p class="eyebrow">THE HOME GAME</p>
-          <h1>坐下来，打几手。</h1>
+          <p class="eyebrow" data-i18n="eyebrowHome">今晚的牌局</p>
+          <h1 data-i18n="headline">坐下来，打几手。</h1>
         </div>
         <div class="table-rules">
-          <span>无限注德州</span>
-          <span>100 BB 买入 · 无抽水</span>
+          <span data-i18n="rulesGame">无限注德州</span>
+          <span data-i18n="rulesStakes">100 BB 买入 · 无抽水</span>
         </div>
       </div>
       <div id="error-banner" class="error-banner" role="alert" hidden>
         <span id="error-message"></span>
-        <button id="retry-button" type="button">重新连接</button>
+        <button id="retry-button" type="button" data-i18n="retry">重新连接</button>
       </div>
       <div class="table-stage" id="table-stage">
         <div class="table-shadow"></div>
         <div class="table-rail">
-          <div class="table-felt"><span class="felt-wordmark">PL</span><span class="felt-caption">GOOD COMPANY. GOOD HANDS.</span></div>
+          <div class="table-felt"><span class="felt-wordmark">PL</span><span class="felt-caption" data-i18n="feltCaption">好友相聚 · 好牌相伴</span></div>
         </div>
         <div class="table-centre">
-          <div class="street-label" id="street-label">正在入座</div>
-          <div class="pot" id="pot"><span>底池</span> <strong>—</strong> <small>BB</small></div>
-          <div class="board" id="board" aria-label="公共牌"></div>
-          <div class="table-message" id="table-message" aria-live="polite">牌友们正在等你</div>
+          <div class="street-label" id="street-label" data-i18n="seating">正在入座</div>
+          <div class="pot" id="pot"><span data-i18n="pot">底池</span> <strong>—</strong> <small>BB</small></div>
+          <div class="board" id="board" data-i18n-aria="boardAria"></div>
+          <div class="table-message" id="table-message" aria-live="polite" data-i18n="tableWaiting">牌友们正在等你</div>
         </div>
         <div id="seats"></div>
         <div class="hand-marker" id="hand-marker">第 1 手</div>
       </div>
       <p class="notice" id="notice" role="status" hidden></p>
-      <section class="action-panel" id="action-panel" aria-label="行动控制" aria-live="polite">
-        <div class="waiting-state"><span class="loading-dot"></span> 正在准备牌桌…</div>
+      <section class="action-panel" id="action-panel" data-i18n-aria="actionsAria" aria-live="polite">
+        <div class="waiting-state"><span class="loading-dot"></span> <span data-i18n="preparing">正在准备牌桌…</span></div>
       </section>
       <div class="table-footer">
-        <span><span class="small-spade">♠</span> 模拟筹码 · 只为练习与乐趣</span>
-        <span>观察对手，慢慢找到自己的节奏。</span>
+        <span><span class="small-spade">♠</span> <span data-i18n="footerPlay">模拟筹码 · 只为练习与乐趣</span></span>
+        <span data-i18n="footerHint">观察对手，慢慢找到自己的节奏。</span>
       </div>
     </section>
 
     <aside class="table-sidebar">
       <div class="session-card invite-card" id="invite-card" hidden>
-        <p class="eyebrow">INVITE</p>
-        <h2>朋友的牌桌</h2>
-        <p class="invite-copy">把链接发给朋友，输入名字就能入座。空位由对手补上，每步 30 秒。</p>
+        <p class="eyebrow" data-i18n="eyebrowInvite">邀请</p>
+        <h2 data-i18n="inviteTitle">朋友的牌桌</h2>
+        <p class="invite-copy" data-i18n="inviteCopy">把链接发给朋友，输入名字就能入座。空位由对手补上，每步 30 秒。</p>
         <div class="invite-link" id="invite-link"></div>
         <div class="invite-actions">
-          <button class="primary-button" id="copy-invite" type="button">复制链接</button>
-          <button class="secondary-button" id="leave-table" type="button">离开牌桌</button>
+          <button class="primary-button" id="copy-invite" type="button" data-i18n="copyLink">复制链接</button>
+          <button class="secondary-button" id="leave-table" type="button" data-i18n="leaveTable">离开牌桌</button>
         </div>
       </div>
       <div class="session-card">
-        <p class="eyebrow">THIS SESSION</p>
+        <p class="eyebrow" data-i18n="eyebrowSession">本场</p>
         <div class="session-top">
-          <h2>今晚的牌桌</h2>
+          <h2 data-i18n="sessionTitle">今晚的牌桌</h2>
           <span class="session-badge">6 / 6</span>
         </div>
         <div class="session-stats">
-          <div><span>已完成</span><strong id="session-hands">0 <small>手</small></strong></div>
-          <div><span>本场净变化</span><strong id="session-net">0 <small>BB</small></strong></div>
+          <div><span data-i18n="handsDone">已完成</span><strong id="session-hands">0 <small>手</small></strong></div>
+          <div><span data-i18n="sessionNet">本场净变化</span><strong id="session-net">0 <small>BB</small></strong></div>
         </div>
       </div>
       <section class="activity-card">
         <div class="section-heading">
-          <h2>桌边动态</h2>
-          <span id="activity-hand">LIVE</span>
+          <h2 data-i18n="activityTitle">桌边动态</h2>
+          <span id="activity-hand" data-i18n="activityLive">进行中</span>
         </div>
-        <ol id="activity-list" class="activity-list"><li class="empty-activity">发牌后，行动会记录在这里。</li></ol>
+        <ol id="activity-list" class="activity-list"><li class="empty-activity" data-i18n="activityEmpty">发牌后，行动会记录在这里。</li></ol>
       </section>
       <div class="table-note">
         <span class="note-star">✳</span>
         <div>
-          <h3>熟悉这几位牌友</h3>
-          <p>有人耐心等牌，有人爱跟到底，也有人总想把底池打大。看他们怎么打，再决定你的下一步。</p>
+          <h3 data-i18n="noteTitle">熟悉这几位牌友</h3>
+          <p data-i18n="noteBody">有人耐心等牌，有人爱跟到底，也有人总想把底池打大。看他们怎么打，再决定你的下一步。</p>
         </div>
       </div>
-      <button class="text-button" id="reset-button" type="button">重新开一场 <span>↗</span></button>
+      <button class="text-button" id="reset-button" type="button"><i data-i18n="resetLink">重新开一场</i> <span>↗</span></button>
     </aside>
   </main>
 
   <dialog id="history-dialog" class="history-dialog" aria-labelledby="history-title">
     <div class="drawer-header">
       <div>
-        <p class="eyebrow">AFTER THE HAND</p>
-        <h2 id="history-title">牌后，再看一遍。</h2>
+        <p class="eyebrow" data-i18n="eyebrowAfter">牌后</p>
+        <h2 id="history-title" data-i18n="historyTitle">牌后，再看一遍。</h2>
       </div>
-      <button id="close-history" class="close-button" type="button" aria-label="关闭复盘">×</button>
+      <button id="close-history" class="close-button" type="button" data-i18n-aria="closeReview">×</button>
     </div>
     <div id="history-content" class="history-content"></div>
   </dialog>
@@ -116,19 +117,19 @@
     <form id="name-form" method="dialog">
       <h2 id="name-title">朋友局</h2>
       <p id="name-copy"></p>
-      <input id="name-input" class="name-input" maxlength="12" autocomplete="nickname" aria-label="你的名字" required>
+      <input id="name-input" class="name-input" maxlength="12" autocomplete="nickname" data-i18n-aria="nameAria" required>
       <div class="dialog-actions">
-        <button id="cancel-name" class="secondary-button" type="button">取消</button>
+        <button id="cancel-name" class="secondary-button" type="button" data-i18n="cancel">取消</button>
         <button id="confirm-name" class="primary-button" type="submit">入座</button>
       </div>
     </form>
   </dialog>
   <dialog id="reset-dialog" class="reset-dialog" aria-labelledby="reset-title">
-    <h2 id="reset-title">换一壶茶，重新开场。</h2>
-    <p>所有人回到 100 BB，本场记录会清空。</p>
+    <h2 id="reset-title" data-i18n="resetTitle">换一壶茶，重新开场。</h2>
+    <p data-i18n="resetCopy">所有人回到 100 BB，本场记录会清空。</p>
     <div class="dialog-actions">
-      <button id="cancel-reset" class="secondary-button" type="button">继续这场</button>
-      <button id="confirm-reset" class="primary-button" type="button">重新开场</button>
+      <button id="cancel-reset" class="secondary-button" type="button" data-i18n="resetKeep">继续这场</button>
+      <button id="confirm-reset" class="primary-button" type="button" data-i18n="resetConfirm">重新开场</button>
     </div>
   </dialog>
 </body>
