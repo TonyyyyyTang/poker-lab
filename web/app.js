@@ -42,7 +42,12 @@
   async function transition(path, body = {}) {
     if (busy) return;
     busy = true; renderActions();
-    try { state = await api(path, body); clearError(); render(); }
+    try {
+      const next = await api(path, body);
+      // A slow reply must not undo a newer state the poll already delivered.
+      if (!state || next.version >= state.version) state = next;
+      clearError(); render();
+    }
     catch (error) { showError(error); }
     finally { busy = false; renderActions(); poll(); }
   }
