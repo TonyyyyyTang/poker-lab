@@ -1573,10 +1573,10 @@ button[hidden], [hidden] {
   .room-label .room-divider {
     margin: 0;
   }
-  .history-button {
+  .history-button, .invite-button {
     font-size: 0;
   }
-  .history-button span {
+  .history-button span, .invite-button span {
     font-size: 23px;
     margin: 0;
   }
@@ -1979,4 +1979,64 @@ button[hidden], [hidden] {
     animation: none!important;
     transition: none!important;
   }
+}
+
+.topbar-actions {
+  display: flex;
+  gap: 22px;
+}
+
+.invite-card {
+  margin-bottom: 18px;
+}
+
+.invite-card h2 {
+  font: 21px var(--serif);
+  margin: 8px 0 10px;
+}
+
+.invite-copy {
+  font-size: 11px;
+  line-height: 1.7;
+  color: #819271;
+  margin: 0 0 14px;
+}
+
+.invite-link {
+  font: 11px ui-monospace, Menlo, monospace;
+  color: var(--ink);
+  background: var(--white);
+  border: 1px solid #d8ddcf;
+  border-radius: 5px;
+  padding: 9px 10px;
+  word-break: break-all;
+  user-select: all;
+}
+
+.invite-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.name-input {
+  width: 100%;
+  font-size: 15px;
+  padding: 10px 12px;
+  border: 1px solid #cdd5bf;
+  border-radius: 6px;
+  background: var(--white);
+  color: var(--ink);
+}
+
+.notice {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: #8a6a3a;
+  text-align: center;
+}
+
+.countdown {
+  font-variant-numeric: tabular-nums;
+  margin-left: 4px;
 }

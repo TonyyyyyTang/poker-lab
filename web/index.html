@@ -16,7 +16,10 @@
       <small>德州训练场</small>
     </a>
     <div class="room-label"><span class="live-dot"></span> 朋友局 <span class="room-divider">/</span> 六人桌</div>
-    <button class="icon-button history-button" id="history-button" type="button"><span aria-hidden="true">↺</span> 牌局记录</button>
+    <div class="topbar-actions">
+      <button class="icon-button invite-button" id="invite-button" type="button" aria-label="邀请朋友"><span aria-hidden="true">＋</span> 邀请朋友</button>
+      <button class="icon-button history-button" id="history-button" type="button"><span aria-hidden="true">↺</span> 牌局记录</button>
+    </div>
   </header>
 
   <main class="workspace">
@@ -49,6 +52,7 @@
         <div id="seats"></div>
         <div class="hand-marker" id="hand-marker">第 1 手</div>
       </div>
+      <p class="notice" id="notice" role="status" hidden></p>
       <section class="action-panel" id="action-panel" aria-label="行动控制" aria-live="polite">
         <div class="waiting-state"><span class="loading-dot"></span> 正在准备牌桌…</div>
       </section>
@@ -59,6 +63,16 @@
     </section>
 
     <aside class="table-sidebar">
+      <div class="session-card invite-card" id="invite-card" hidden>
+        <p class="eyebrow">INVITE</p>
+        <h2>朋友的牌桌</h2>
+        <p class="invite-copy">把链接发给朋友，输入名字就能入座。空位由对手补上，每步 30 秒。</p>
+        <div class="invite-link" id="invite-link"></div>
+        <div class="invite-actions">
+          <button class="primary-button" id="copy-invite" type="button">复制链接</button>
+          <button class="secondary-button" id="leave-table" type="button">离开牌桌</button>
+        </div>
+      </div>
       <div class="session-card">
         <p class="eyebrow">THIS SESSION</p>
         <div class="session-top">
@@ -97,6 +111,17 @@
       <button id="close-history" class="close-button" type="button" aria-label="关闭复盘">×</button>
     </div>
     <div id="history-content" class="history-content"></div>
+  </dialog>
+  <dialog id="name-dialog" class="reset-dialog" aria-labelledby="name-title">
+    <form id="name-form" method="dialog">
+      <h2 id="name-title">朋友局</h2>
+      <p id="name-copy"></p>
+      <input id="name-input" class="name-input" maxlength="12" autocomplete="nickname" aria-label="你的名字" required>
+      <div class="dialog-actions">
+        <button id="cancel-name" class="secondary-button" type="button">取消</button>
+        <button id="confirm-name" class="primary-button" type="submit">入座</button>
+      </div>
+    </form>
   </dialog>
   <dialog id="reset-dialog" class="reset-dialog" aria-labelledby="reset-title">
     <h2 id="reset-title">换一壶茶，重新开场。</h2>
