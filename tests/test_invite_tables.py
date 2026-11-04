@@ -3,6 +3,7 @@ from copy import deepcopy
 import unittest
 from unittest.mock import patch
 
+from poker_lab.errors import GameError
 from poker_lab.game import AUTO_DEAL_SECONDS, PLAYERS, Table
 
 
@@ -90,8 +91,9 @@ class InviteTableTests(unittest.TestCase):
         for seat in range(1, 6):
             self.assertEqual(table.join("你"), seat)
             self.assertEqual(table.pending[seat]["name"], f"你 {seat + 1}")
-        with self.assertRaisesRegex(ValueError, "这张桌已经坐满了。"):
+        with self.assertRaises(GameError) as error:
             table.join("another")
+        self.assertEqual(error.exception.code, "table_full")
         table.leave(2)
         self.assertFalse(table.has_human(2))
         self.assertEqual(table.join("你"), 2)

@@ -176,9 +176,9 @@ class TableTests(unittest.TestCase):
         self.assertEqual(table.observation(0)["eligible_pot_after_call"], 62)
         table.act(0, "check_call")
         finish_by_calling(table)
-        notes = " ".join(table.hand(table.hand_id, 0)["notes"])
-        self.assertIn("30.6%", notes)  # 19 / (20 + 20 + 20 + dead big blind 2)
-        self.assertNotIn("8.6%", notes)
+        odds = next(note for note in table.hand(table.hand_id, 0)["notes"] if note["kind"] == "pot_odds")
+        self.assertEqual(odds, {"kind": "pot_odds", "street": "preflop", "call": 19,
+                                "eligible": 62, "required": 30.6})
 
     def test_history_keeps_latest_twenty_completed_hands(self):
         table = Table(seed=8)

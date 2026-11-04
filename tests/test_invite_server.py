@@ -212,7 +212,8 @@ class InviteServerTests(unittest.TestCase):
         self.assertEqual(table.next_due(), deadline)
         for invalid in (previous_decision, table.version + 1, True, "1", None):
             before = table.view(0)
-            self.assertEqual(self.request("POST", "/api/action", {"version": invalid, "action": "check_call"}, sid=host)[0], 409)
+            expected_status = 409 if type(invalid) is int else 400
+            self.assertEqual(self.request("POST", "/api/action", {"version": invalid, "action": "check_call"}, sid=host)[0], expected_status)
             self.assertEqual(table.view(0), before)
         payload = {"version": version, "action": "check_call"}
         self.assertEqual(self.request("POST", "/api/action", payload, sid=host)[0], 200)
@@ -225,7 +226,8 @@ class InviteServerTests(unittest.TestCase):
         guests = [self.join(code, f"Guest {seat}") for seat in range(1, 6)]
         self.assertEqual([view["you"] for _, view in guests], list(range(1, 6)))
         status, body, headers = self.request("POST", "/api/join", {"code": code, "name": "Extra"})
-        self.assertEqual((status, body), (409, {"error": "这张桌已经坐满了。"}))
+        self.assertEqual((status, body["code"]), (409, "table_full"))
+        self.assertEqual(set(body), {"code", "error"})
         self.assertNotIn("Set-Cookie", headers)
         self.assertEqual(len(server.SESSIONS), 6)
         sid, old = guests[0]

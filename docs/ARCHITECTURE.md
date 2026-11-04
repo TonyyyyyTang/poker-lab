@@ -1,6 +1,6 @@
 # Architecture
 
-Status: public solo table with adaptive bots and server-driven play; invite-table backend prepared for review on 4 November 2026. The matching invite client must land before deployment. The design below includes later extensions, identified as proposals.
+Status: public solo table with adaptive bots and server-driven play; invite-table and language-data backends prepared for review on 4 November 2026. The matching clients must land before deployment. The design below includes later extensions, identified as proposals.
 
 ## Implemented slice
 
@@ -8,6 +8,7 @@ Status: public solo table with adaptive bots and server-driven play; invite-tabl
 - `poker_lab/opponents.py`: per-table opponent statistics (entry, raising, folding to bets, aggression, shown river bluffs) counted from completed hands' public records, with Beta-prior estimates.
 - `poker_lab/bots.py`: three configured heuristic policies, adjusted by those statistics according to each personality's trust and adaptation rate, using position, preflop selection, public aggression, approximate random-range showdown share and explicit biases. No external model calls.
 - `poker_lab/server.py`: standard-library HTTP server bound to loopback by default, with `HOST`/`PORT` overrides for hosting, opaque per-browser session cookies (Secure behind HTTPS), separate session/table registries, per-table locking and long polling, a background turn scheduler, and an explicit static-file allowlist.
+- `poker_lab/errors.py`: shared error codes and short English fallback messages; HTTP error responses expose `{code, error}` without internal exception details.
 - `web/`: native HTML, CSS and JavaScript for the six-seat table, actions and post-hand replay. No frontend toolchain is required.
 - `tests/`: adapter boundary tests and conditional policy comparisons.
 
@@ -24,6 +25,8 @@ Shared tables give humans 30 seconds per turn and automatically deal five second
 The table version still increments for membership and away notifications, but an action may use any version since its current decision began. Only an actual action or a new deal advances that decision boundary. This preserves in-flight human decisions across unrelated joins, leaves and returns while rejecting duplicate actions and obsolete decisions.
 
 Seat changes take effect at the next deal. Pending joiners receive public views without the current bot's private cards, legal actions or history. A new occupant starts with 100 BB, zero session net, fresh opponent counts and a history boundary excluding all prior occupants' hands. Other occupants retain their histories and reads. Departing seats return to their original bot; host seat zero uses the fictional tight regular 阿禾 because it originally had no bot. Solo play keeps manual dealing and no turn timer.
+
+Player-facing data contains structured actions and last actions, winner payoffs and rebuy seat numbers, plus review-note objects for the result, pot odds and visibility. Live views, histories and replays use those same data forms; the client composes all labels and sentences. Bot records carry Chinese and English names; guest names remain as entered, with the unnamed solo label represented as 你 / You. Action `all_in` records whether the action committed the remaining stack, even when immediate settlement pays chips back. There is no server-side language preference or negotiation.
 
 PokerKit is MIT licensed and was selected after checking its documented full betting/settlement model. Its API is pinned and tested at 0.7.4. Tables are private and invite-only, with no public listing or accounts.
 

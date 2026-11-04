@@ -17,7 +17,8 @@ import time
 import unicodedata
 from urllib.parse import parse_qs, urlsplit
 
-from .game import HAND_HISTORY_LIMIT, PLAYERS, Table
+from .errors import GameError, error_response
+from .game import PLAYERS, Table
 
 ROOT = Path(__file__).resolve().parent.parent
 MAX_SESSIONS = 100
@@ -70,7 +71,7 @@ def _expire_sessions(now):
 
 def _register_table(table):
     if table.closed:
-        raise ValueError("牌桌已关闭。")
+        raise GameError("expired")
     for table_id, registered in TABLES.items():
         if registered is table:
             return table_id
@@ -87,7 +88,7 @@ def _store_session(sid, table_id, seat=0):
     now = time.monotonic()
     table = TABLES[table_id]
     if type(seat) is not int or not 0 <= seat < 6 or table.closed or not table.has_human(seat):
-        raise ValueError("会话必须对应一个玩家座位。")
+        raise GameError("not_seated")
     previous = SESSIONS.get(sid)
     session = Session(table_id, seat, now)
     SESSIONS[sid] = session
@@ -102,10 +103,10 @@ def _store_session(sid, table_id, seat=0):
 
 def guest_name(value):
     if not isinstance(value, str) or any(unicodedata.category(c) in ("Cc", "Cf", "Cs") for c in value):
-        raise ValueError("名字须为 1–12 个字符，不能包含控制字符。")
+        raise GameError("bad_name")
     name = value.strip()
     if not 1 <= len(name) <= 12:
-        raise ValueError("名字须为 1–12 个字符，不能包含控制字符。")
+        raise GameError("bad_name")
     return name
 
 
@@ -124,7 +125,7 @@ def bind_session(sid, path, payload):
             _drop_session(sid)
             session = None
         if session is None and path in ("/api/reset", "/api/leave"):
-            return 401, {"error": "牌桌已过期或服务已重启，请重新连接开始新的一场。"}, None
+            raise GameError("expired")
         source = TABLES[session.table_id] if session else None
         with source.lock if source else nullcontext():
             if session:
@@ -137,18 +138,12 @@ def bind_session(sid, path, payload):
                 target = next((t for t in TABLES.values()
                                if t.shared and t.invite == code and not t.closed), None)
                 if target is None:
-                    return 404, {"error": "找不到这张牌桌，邀请链接可能已过期。"}, None
+                    raise GameError("invite_not_found")
                 if source is target:
                     return 200, target.view(session.seat), None
-                try:
-                    name = guest_name(payload.get("name"))
-                except ValueError as exc:
-                    return 400, {"error": str(exc)}, None
+                name = guest_name(payload.get("name"))
                 with target.changed:
-                    try:
-                        seat = target.join(name)
-                    except ValueError as exc:
-                        return 409, {"error": str(exc)}, None
+                    seat = target.join(name)
                     # Versions must stay monotonic for this browser across table switches.
                     if source:
                         target.version = max(target.version, source.version + 1)
@@ -158,10 +153,7 @@ def bind_session(sid, path, payload):
                     return 200, target.view(seat), cookie
             options = {"version": source.version if source else 0}
             if path == "/api/tables":
-                try:
-                    name = guest_name(payload.get("name"))
-                except ValueError as exc:
-                    return 400, {"error": str(exc)}, None
+                name = guest_name(payload.get("name"))
                 invite = secrets.token_urlsafe(8)
                 while invite in TABLES or any(t.invite == invite for t in TABLES.values()):
                     invite = secrets.token_urlsafe(8)
@@ -259,9 +251,27 @@ class Handler(BaseHTTPRequestHandler):
         return cookie["poker_session"].value if "poker_session" in cookie else None
 
     def session_expired(self):
-        return self.reply(401, {"error": "牌桌已过期或服务已重启，请重新连接开始新的一场。"})
+        return self.reply(*error_response("expired"))
 
     def do_GET(self):
+        self._respond(self._get)
+
+    def do_POST(self):
+        self._respond(self._post)
+
+    def _respond(self, operation):
+        try:
+            operation()
+        except GameError as exc:
+            self.reply(*error_response(exc.code))
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # The browser closed its poll or request before the response arrived.
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            self.reply(*error_response("server_error"))
+
+    def _get(self):
         url = urlsplit(self.path)
         path = url.path
         if path == "/healthz":
@@ -270,7 +280,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(200, {"ok": True})
         if path.startswith("/api/"):
             if path not in ("/api/state", "/api/history") and not path.startswith("/api/hand/"):
-                return self.reply(404, {"error": "接口不存在。"})
+                raise GameError("not_found")
             after = None
             try:
                 values = parse_qs(url.query, keep_blank_values=True).get("after")
@@ -281,7 +291,7 @@ class Handler(BaseHTTPRequestHandler):
                     if after < 0:
                         raise ValueError
             except ValueError:
-                return self.reply(400, {"error": "版本号格式错误。"})
+                raise GameError("bad_request") from None
             while True:
                 binding = _resolve_session(self.session_id())
                 if binding is None:
@@ -304,11 +314,10 @@ class Handler(BaseHTTPRequestHandler):
                         try:
                             hand_id = int(path.rsplit("/", 1)[-1])
                         except ValueError:
-                            status, body = 404, {"error": "找不到这手牌。"}
+                            status, body = error_response("hand_not_found")
                         else:
                             hand = table.hand(hand_id, session.seat)
-                            status, body = (200, hand) if hand else (404, {
-                                "error": f"这手牌尚未结束或已不在最近 {HAND_HISTORY_LIMIT} 手中。"})
+                            status, body = (200, hand) if hand else error_response("hand_not_found")
                 # Never hold a table or registry lock while writing to a slow browser.
                 return self.reply(status, body)
         # An explicit allowlist keeps private files and source code off the web server.
@@ -316,10 +325,10 @@ class Handler(BaseHTTPRequestHandler):
         if re.fullmatch(r"/t/[A-Za-z0-9_-]+", path):
             files[path] = "index.html"
         if path not in files:
-            return self.reply(404, {"error": "Not found"})
+            raise GameError("not_found")
         file = ROOT / "web" / files[path]
         if not file.exists():
-            return self.reply(503, {"error": "界面仍在准备中。"})
+            raise GameError("server_error")
         content = file.read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", (mimetypes.guess_type(file.name)[0] or "text/plain") + "; charset=utf-8")
@@ -330,23 +339,23 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(content)
 
-    def do_POST(self):
+    def _post(self):
         origin = self.headers.get("Origin")
         if origin is not None and not same_origin_host(origin, self.headers.get("Host")):
-            return self.reply(403, {"error": "仅接受当前站点牌桌的操作。"})
+            raise GameError("forbidden_origin")
         path = urlsplit(self.path).path
         if path not in ("/api/session", "/api/reset", "/api/action", "/api/next",
                         "/api/tables", "/api/join", "/api/leave", "/api/back"):
-            return self.reply(404, {"error": "接口不存在。"})
+            raise GameError("not_found")
         try:
             length = int(self.headers.get("Content-Length", "0"))
             if not 0 <= length <= 4096:
-                raise ValueError("请求过大。")
+                raise ValueError
             payload = json.loads(self.rfile.read(length) or b"{}")
             if not isinstance(payload, dict):
-                raise ValueError("请求格式错误。")
+                raise ValueError
         except (ValueError, json.JSONDecodeError):
-            return self.reply(400, {"error": "请求格式错误。"})
+            raise GameError("bad_request") from None
         sid = self.session_id()
         if path in ("/api/session", "/api/reset", "/api/tables", "/api/join", "/api/leave"):
             status, body, cookie = bind_session(sid, path, payload)
@@ -357,31 +366,23 @@ class Handler(BaseHTTPRequestHandler):
         session, table = binding
         with table.lock:
             if not session.active or table.closed:
-                status, body = 401, {"error": "牌桌已过期或服务已重启，请重新连接开始新的一场。"}
+                raise GameError("expired")
+            if not table.has_human(session.seat) or session.seat in table.pending:
+                raise GameError("not_seated")
+            if path == "/api/back":
+                table.back(session.seat)
             else:
-                try:
-                    if not table.has_human(session.seat) or session.seat in table.pending:
-                        raise ValueError("此座位由对手控制。")
-                    if path == "/api/back":
-                        table.back(session.seat)
-                    else:
-                        version = payload.get("version")
-                        if type(version) is not int:
-                            raise ValueError("牌局已更新，请重试当前操作。")
-                        if path == "/api/action":
-                            table.act(session.seat, payload.get("action"), payload.get("amount"), version)
-                        else:
-                            if version != table.version:
-                                raise ValueError("牌局已更新，请重试当前操作。")
-                            table.new_hand()
-                    status, body = 200, table.view(session.seat)
-                except ValueError as exc:
-                    status, body = 409, {"error": str(exc)}
-                except Exception:
-                    import traceback
-                    traceback.print_exc()
-                    status, body = 500, {"error": "牌局遇到错误，请刷新后重试。"}
-        return self.reply(status, body)
+                version = payload.get("version")
+                if type(version) is not int or version < 0:
+                    raise GameError("bad_request")
+                if path == "/api/action":
+                    table.act(session.seat, payload.get("action"), payload.get("amount"), version)
+                else:
+                    if version != table.version:
+                        raise GameError("stale")
+                    table.new_hand()
+            body = table.view(session.seat)
+        return self.reply(200, body)
 
 
 def main():
