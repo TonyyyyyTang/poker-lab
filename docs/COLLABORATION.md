@@ -37,7 +37,7 @@ The first version is a six-seat, 100 BB cash-style table with three heuristic op
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-The last implementation verification passed 17 tests, including 100 simulated hands. Recent history lives in server memory and disappears on restart. Long-term opponent memory, temporary moods and persistent history are possible future tasks, not implemented features.
+The last implementation verification passed 17 tests, including 100 simulated hands. Recent history lives in server memory and disappears on restart. Bots learn public opponent statistics within a table session. Memory across sessions, temporary moods and persistent history are possible future tasks, not implemented features.
 
 `AGENTS.md` is the common instruction file; `CLAUDE.md` imports it using Claude Code's supported import syntax. Local private context and credentials are never part of a commit or handoff.
 

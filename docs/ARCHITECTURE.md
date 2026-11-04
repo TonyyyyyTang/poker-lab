@@ -5,7 +5,8 @@ Status: local implementation with public solo hosting configuration prepared, 4 
 ## Implemented slice
 
 - `poker_lab/game.py`: PokerKit 0.7.4 adapter; fixed physical seats mapped to rotating engine positions; 2 integer units per BB; independently seeded dealing and policy streams; filtered seat observations; immutable public replay frames; recent hand history.
-- `poker_lab/bots.py`: three configured heuristic policies, using position, preflop selection, public aggression, approximate random-range showdown share and explicit biases. No external model calls.
+- `poker_lab/opponents.py`: per-table opponent statistics (entry, raising, folding to bets, aggression, shown river bluffs) counted from completed hands' public records, with Beta-prior estimates.
+- `poker_lab/bots.py`: three configured heuristic policies, adjusted by those statistics according to each personality's trust and adaptation rate, using position, preflop selection, public aggression, approximate random-range showdown share and explicit biases. No external model calls.
 - `poker_lab/server.py`: standard-library HTTP server bound to loopback by default, with `HOST`/`PORT` overrides for hosting, opaque per-browser session cookies (Secure behind HTTPS), versioned actions, serialised state changes, and an explicit static-file allowlist.
 - `web/`: native HTML, CSS and JavaScript for the six-seat table, actions and post-hand replay. No frontend toolchain is required.
 - `tests/`: adapter boundary tests and conditional policy comparisons.

@@ -21,7 +21,7 @@ Further modelling ideas include:
 - Memory of revealed bluffs, public betting patterns and prior confrontations.
 - Different quality of range estimates and uncertainty.
 
-These are exploratory game models, not validated psychological models. Temporary states and long-term learning have not yet been implemented.
+These are exploratory game models, not validated psychological models. Bots now learn public statistics about each player within a table session (`poker_lab/opponents.py`); temporary states and memory across sessions have not been implemented.
 
 ## Possible next experiences
 

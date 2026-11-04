@@ -30,7 +30,12 @@ The current solo game (one human, five bots) is playable at a public HTTPS URL o
 
 ## Owner steps
 
-The owner creates the Render account, connects the GitHub repository, and approves the first deploy. Agents never handle hosting credentials.
+The owner controls the Render account and all hosting credentials. Agents never handle hosting credentials.
+
+1. Create the Render account, connect the GitHub repository, and approve the first deploy using `render.yaml` on the free plan. The configuration installs `requirements.txt`, starts `python -m poker_lab.server`, sets `HOST=0.0.0.0`, uses Render's `PORT`, and checks `/healthz`. `.python-version` pins Python 3.13.2.
+2. Verify the public HTTPS URL and add it to README.
+3. On desktop and phone, play a complete hand, open its replay, and start the next hand.
+4. With a page open, manually redeploy; trigger another request and verify **重新连接** starts a fresh table.
 
 ## Out of scope
 
@@ -43,3 +48,5 @@ Implemented on `codex/public-solo-table`: environment binding, HTTP/HTTPS origin
 Verification: all 29 unit tests pass on Python 3.13.2. Local browser checks on port 18765 passed for completing a hand, opening and advancing replay, and dealing the next hand. Restarting that test server with the page open produced the session-loss banner on the next action; **重新连接** cleared it and started hand 1 with fresh stacks. Default binding and environment/CLI overrides are covered by server-construction tests; the existing local server on port 8765 was left running.
 
 Pending owner steps: deployment, adding the public HTTPS URL, desktop/phone checks on that URL, and reconnect after a Render redeploy. No deployment or hosting credential access was performed.
+
+Review follow-up: merged `main` with adaptive bots, keeping both the opponent-model and hosting descriptions in the architecture document. Simplified Origin validation to HTTP/HTTPS host-and-port comparison and moved the owner checklist here from README. The combined suite passes all 36 tests. The global-lock bot-computation follow-up is recorded under Phase 1 in the roadmap.

@@ -4,13 +4,14 @@ import unittest
 from collections import Counter
 
 from poker_lab.bots import DECK, PROFILES, choose_action
+from poker_lab.opponents import OpponentStats
 
 
 def observation(**changes):
     value = {
         "seat": 2, "street": "preflop", "hole": ["7s", "6s"], "board": [],
         "pot": 3, "stack": 200, "bet": 0, "big_blind": 2, "position": "HJ",
-        "opponents": 5, "history": [],
+        "opponents": 5, "history": [], "reads": OpponentStats().snapshot(),
         "legal": {"can_fold": True, "can_check": False, "call_amount": 2,
                   "can_raise": True, "min_raise_to": 4, "max_raise_to": 200},
     }

@@ -7,6 +7,8 @@ import secrets
 
 from pokerkit import Automation as A, Deck, Mode, NoLimitTexasHoldem
 
+from .opponents import OpponentStats
+
 ENGINE_VERSION = "pokerkit-0.7.4/adapter-1"
 HAND_HISTORY_LIMIT = 20
 PLAYERS = [
@@ -21,6 +23,7 @@ AUTOMATIONS = (A.ANTE_POSTING, A.BET_COLLECTION, A.BLIND_OR_STRADDLE_POSTING,
                A.RUNOUT_COUNT_SELECTION, A.HOLE_CARDS_SHOWING_OR_MUCKING,
                A.HAND_KILLING, A.CHIPS_PUSHING, A.CHIPS_PULLING)
 STREETS = ["preflop", "flop", "turn", "river"]
+POSITIONS = ["SB", "BB", "UTG", "HJ", "CO", "BTN"]
 
 
 def derived_seed(seed, label):
@@ -40,6 +43,7 @@ class Table:
         self.version = 0
         self.session_net = 0
         self.hands = []
+        self.opponent_stats = OpponentStats()
         self.new_hand()
 
     def new_hand(self):
@@ -111,10 +115,11 @@ class Table:
                     hole=self.holes[seat].copy(), board=self._board(),
                     pot=self.state.total_pot_amount, stack=self.state.stacks[i],
                     bet=self.state.bets[i], big_blind=2,
-                    position=["SB", "BB", "UTG", "HJ", "CO", "BTN"][i],
+                    position=POSITIONS[i],
                     opponents=sum(self.state.statuses) - 1,
                     eligible_pot_after_call=eligible,
-                    legal=self.legal(), history=deepcopy(self.actions))
+                    legal=self.legal(), history=deepcopy(self.actions),
+                    reads=self.opponent_stats.snapshot())
 
     def snapshot(self):
         s = self.state
@@ -128,7 +133,7 @@ class Table:
                                 in_hand=seat not in self.folded,
                                 all_in=s.stacks[i] == 0 and seat not in self.folded,
                                 cards=cards.copy(), last_action=self.last_actions[seat],
-                                position=["SB", "BB", "UTG", "HJ", "CO", "BTN"][i],
+                                position=POSITIONS[i],
                                 net=s.payoffs[i] if complete else 0))
         pot = s.total_pot_amount
         if complete:
@@ -210,6 +215,7 @@ class Table:
             winners = [f"{PLAYERS[seat]['name']} +{bb(s.payoffs[i])}"
                        for i, seat in enumerate(self.seats) if s.payoffs[i] > 0]
             self.summary = "，".join(winners) or "平分底池"
+            self.opponent_stats.update(self._public_record())
             self._record()
             notes = self._review_notes()
             self.hands.append(dict(hand_id=self.hand_id, frames=deepcopy(self.frames),
@@ -217,6 +223,12 @@ class Table:
                                    net=s.payoffs[self.indices[0]], board=self._board()))
             self.hands = self.hands[-HAND_HISTORY_LIMIT:]
             self._saved = True
+
+    def _public_record(self):
+        """What every seat saw this hand: no unrevealed cards."""
+        return dict(positions={seat: POSITIONS[i] for i, seat in enumerate(self.seats)},
+                    actions=[dict(player=a["player"], kind=a["kind"], street=a["street"]) for a in self.actions],
+                    shown=deepcopy(self.shown), board=self._board())
 
     def _review_notes(self):
         hero = [a for a in self.actions if a["player"] == 0]

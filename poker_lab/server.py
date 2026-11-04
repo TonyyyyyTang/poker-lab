@@ -68,12 +68,6 @@ def same_origin_host(origin, host):
             return False
         if not source.hostname or not target.hostname:
             return False
-        if any(value is not None for value in (
-                source.username, source.password, target.username, target.password)):
-            return False
-        if any((source.path, source.query, source.fragment,
-                target.path, target.query, target.fragment)):
-            return False
         default_port = 443 if source.scheme == "https" else 80
         return (source.hostname, source.port if source.port is not None else default_port) == (
             target.hostname, target.port if target.port is not None else default_port)
