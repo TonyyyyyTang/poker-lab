@@ -139,24 +139,33 @@
   const actionLabel = (kind, units, allIn) => t(`act.${kind}`, {a: bb(units)}) + (allIn ? t('allInSuffix') : '');
   const logLabel = (a) => actionLabel(a.kind === 'check_call' ? (a.amount ? 'call' : 'check') : a.kind, a.amount, a.all_in);
   const logLine = (a, players) => `${nameOf(players[a.player])} · ${logLabel(a)}`;
-  const winnersText = (winners, players) =>
-    winners.map((w) => `${nameOf(players[w.seat])} +${bb(w.amount)} BB`).join(t('listSep')) || t('splitPot');
+  const winnersText = (winners) =>
+    winners.map((w) => `${nameOf(w)} +${bb(w.amount)} BB`).join(t('listSep')) || t('splitPot');
   const noteText = (note) => t(`note.${note.kind}`, note.kind === 'result'
     ? {actions: note.actions, net: bb(note.net)}
     : note.kind === 'pot_odds' ? {street: t(`street.${note.street}`), call: bb(note.call), eligible: bb(note.eligible), required: note.required} : {});
   function errorFrom(data, status) {
-    const known = STRINGS[lang][`error.${data.code}`];
-    return Object.assign(new Error(known ? t(`error.${data.code}`) : data.error), {status, code: data.code});
+    const key = `error.${data.code}` in STRINGS[lang] ? `error.${data.code}` : null;
+    return Object.assign(new Error(key ? t(key) : data.error), {status, code: data.code, key});
   }
   async function api(path, body, signal) {
-    const response = await fetch(path, {method: body === undefined ? 'GET' : 'POST', headers: {'Content-Type': 'application/json'}, credentials: 'same-origin', body: body === undefined ? undefined : JSON.stringify(body), signal});
+    let response;
+    try {
+      response = await fetch(path, {method: body === undefined ? 'GET' : 'POST', headers: {'Content-Type': 'application/json'}, credentials: 'same-origin', body: body === undefined ? undefined : JSON.stringify(body), signal});
+    } catch (error) {
+      if (error.name === 'AbortError') throw error;
+      throw Object.assign(new Error(t('connectionLost')), {key: 'connectionLost'});
+    }
     let data;
-    try { data = await response.json(); } catch { throw new Error(t('noResponse')); }
+    try { data = await response.json(); } catch { throw Object.assign(new Error(t('noResponse')), {key: 'noResponse'}); }
     if (!response.ok) throw errorFrom(data, response.status);
     return data;
   }
-  const inviteCode = location.pathname.match(/^\/t\/([A-Za-z0-9_-]+)$/)?.[1] ?? null;
+  const inviteCode = () => location.pathname.match(/^\/t\/([A-Za-z0-9_-]+)$/)?.[1] ?? null;
   const setState = (next) => { state = next; receivedAt = performance.now(); };
+  // A slow reply must not undo a newer state the poll already delivered. The server
+  // keeps versions increasing across table switches, so this holds for create and join.
+  const accept = (next) => { if (!state || next.version >= state.version) setState(next); };
   const remaining = (seconds) => Math.max(0, Math.ceil(seconds - (performance.now() - receivedAt) / 1000));
   const countdown = (kind) => `<span class="countdown" data-countdown="${kind}"></span>`;
   // Countdowns tick locally between server updates.
@@ -173,7 +182,9 @@
     $('notice').textContent = message; $('notice').hidden = false;
     noticeTimer = setTimeout(() => { $('notice').hidden = true; }, 4000);
   }
-  function showError(error) { failed = true; stopPolling(); $('error-message').textContent = error.message || t('connectionLost'); $('error-banner').hidden = false; }
+  let shownError = null;
+  const errorText = (error) => (error.key ? t(error.key) : error.message || t('connectionLost'));
+  function showError(error) { failed = true; stopPolling(); shownError = error; $('error-message').textContent = errorText(error); $('error-banner').hidden = false; }
   function clearError() { failed = false; $('error-banner').hidden = true; }
   function stopPolling() { poller?.abort(); poller = null; }
   // The server runs the game. Keep one long poll open while the tab is visible;
@@ -194,16 +205,14 @@
     if (busy) return;
     busy = true; renderActions();
     try {
-      const next = await api(path, body);
-      // A slow reply must not undo a newer state the poll already delivered.
-      if (!state || next.version >= state.version) setState(next);
+      accept(await api(path, body));
       clearError(); render();
     }
     catch (error) {
       // Someone joined, left or acted first: show the current table instead of failing.
       if (error.status !== 409 || !state) return showError(error);
       notify(error.message);
-      try { setState(await api('/api/state')); render(); } catch (refresh) { showError(refresh); }
+      try { accept(await api('/api/state')); render(); } catch (refresh) { showError(refresh); }
     }
     finally { busy = false; renderActions(); poll(); }
   }
@@ -221,7 +230,7 @@
     $('board').innerHTML = cards(state.board, 5, true);
     const actor = players.find((p) => p.id === state.current_actor);
     $('table-message').textContent = state.pending ? t('pendingMsg')
-      : state.complete ? winnersText(state.winners, players)
+      : state.complete ? winnersText(state.winners)
       : state.current_actor === state.you ? t('yourTurnMsg')
       : actor ? t('thinkingMsg', {name: nameOf(actor)}) : t('dealing');
     if (state.rebuys.length && rebuyHand !== state.hand_id) {
@@ -275,12 +284,21 @@
   function renderActions() {
     if (!state) return;
     const panel = $('action-panel');
+    if (state.players[state.you].away) {
+      panel.innerHTML = `<div class="waiting-state">${t('awayPanel')}<button class="primary-button" id="back-action" ${busy ? 'disabled' : ''}>${t('back')}</button></div>`;
+      $('back-action').onclick = () => transition('/api/back');
+      return;
+    }
+    if (state.pending) {
+      panel.innerHTML = `<div class="waiting-state"><span class="loading-dot"></span>${t('waitPending')}</div>`;
+      return;
+    }
     if (state.complete) {
       panel.innerHTML = [
         '<div class="hand-end">',
         '<div class="hand-end-copy">',
         `<p class="eyebrow">${t('eyebrowMore')}</p>`,
-        `<h3>${esc(winnersText(state.winners, state.players))}</h3>`,
+        `<h3>${esc(winnersText(state.winners))}</h3>`,
         `<p>${t('handEndCopy')}${state.next_hand_in == null ? '' : t('autoDeal', {c: countdown('deal')})}</p>`,
         '</div>',
         '<div class="hand-end-actions">',
@@ -293,14 +311,9 @@
       $('next-hand').onclick = () => transition('/api/next', {version: state.version});
       return;
     }
-    if (state.players[state.you].away) {
-      panel.innerHTML = `<div class="waiting-state">${t('awayPanel')}<button class="primary-button" id="back-action" ${busy ? 'disabled' : ''}>${t('back')}</button></div>`;
-      $('back-action').onclick = () => transition('/api/back');
-      return;
-    }
-    if (state.pending || state.current_actor !== state.you) {
+    if (state.current_actor !== state.you) {
       const actor = state.players.find((p) => p.id === state.current_actor);
-      const waiting = state.pending ? t('waitPending') : actor ? t('waitActor', {name: nameOf(actor)}) : t('dealing');
+      const waiting = actor ? t('waitActor', {name: nameOf(actor)}) : t('dealing');
       panel.innerHTML = `<div class="waiting-state"><span class="loading-dot"></span>${esc(waiting)}<span style="color:#a2aa97;font-size:10px;margin-left:8px">${t('waitHint')}</span></div>`;
       return;
     }
@@ -362,12 +375,11 @@
       else {
         const data = await api('/api/history'); replay = null;
         const hands = data.hands;
-        // History rows carry winners by seat; names come from the current table.
         const handRow = (hand) => [
           `<button class="history-hand" data-hand="${hand.hand_id}">`,
           `<span class="hand-number">${String(hand.hand_id).padStart(2, '0')}</span>`,
           '<span class="hand-copy">',
-          `<strong>${esc(winnersText(hand.winners, state.players))}</strong>`,
+          `<strong>${esc(winnersText(hand.winners))}</strong>`,
           `<small>${hand.board.map(esc).join(' · ') || t('endedPreflop')} · ${t('tapReplay')}</small>`,
           '</span>',
           `<span class="hand-net ${hand.net > 0 ? 'positive' : hand.net < 0 ? 'negative' : ''}">`,
@@ -395,7 +407,7 @@
       '</div>',
     ].join('');
     const notes = replay.notes.map((note) => `<p>${esc(noteText(note))}</p>`).join('');
-    const event = frame.complete ? winnersText(frame.winners, frame.players)
+    const event = frame.complete ? winnersText(frame.winners)
       : lastAction ? logLine(lastAction, frame.players) : t('replayStart');
     $('history-content').innerHTML = [
       `<button class="replay-back" id="back-history">${t('allHands')}</button>`,
@@ -446,8 +458,8 @@
     try { localStorage.setItem('poker-lab-name', name); } catch {}
     busy = true; renderActions();
     try {
-      setState(await api(nameMode === 'join' ? '/api/join' : '/api/tables',
-                         nameMode === 'join' ? {code: inviteCode, name} : {name}));
+      accept(await api(nameMode === 'join' ? '/api/join' : '/api/tables',
+                       nameMode === 'join' ? {code: inviteCode(), name} : {name}));
       history.replaceState(null, '', `/t/${state.table.invite}`);
       clearError(); render();
     } catch (error) {
@@ -476,18 +488,21 @@
     try { localStorage.setItem('poker-lab-lang', lang); } catch {}
     applyStatic();
     render();
+    if (!$('error-banner').hidden) $('error-message').textContent = errorText(shownError);
     if (nameMode && $('name-dialog').open) nameDialogText();
     if ($('history-dialog').open) { if (replay) renderReplay(); else openHistory(); }
   };
+  const checkInvite = () => {
+    if (inviteCode() && state && state.table.invite !== inviteCode()) askName('join');
+  };
   $('retry-button').onclick = async () => {
     if (busy) return; busy = true;
-    try { setState(await api('/api/session', {})); clearError(); render(); }
+    // After a server restart the new session's versions start lower, so replace outright.
+    try { setState(await api('/api/session', {})); clearError(); render(); checkInvite(); }
     catch (error) { showError(error); }
     finally { busy = false; renderActions(); poll(); }
   };
   document.addEventListener('visibilitychange', () => { if (document.hidden) stopPolling(); else poll(); });
   applyStatic();
-  transition('/api/session').then(() => {
-    if (inviteCode && state && state.table.invite !== inviteCode) askName('join');
-  });
+  transition('/api/session').then(checkInvite);
 })();
