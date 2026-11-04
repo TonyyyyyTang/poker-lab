@@ -289,7 +289,8 @@ class Table:
     def _winners(self):
         if self.state.status:
             return []
-        return [dict(seat=seat, amount=self.state.payoffs[i])
+        return [dict(seat=seat, amount=self.state.payoffs[i],
+                     name=self.players[seat]["name"], name_en=self.players[seat]["name_en"])
                 for i, seat in enumerate(self.seats) if self.state.payoffs[i] > 0]
 
     @staticmethod

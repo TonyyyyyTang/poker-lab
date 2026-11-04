@@ -33,7 +33,7 @@ The server sends language-neutral data: codes, seat numbers and amounts. The bro
 
 2. **Actions.** Each entry in `actions` is `{player, kind, amount, street, all_in}` with `kind` in `fold`, `check_call`, `raise`. `amount` keeps today's meaning (street total for a raise, chips added for a call). Drop `text`.
 3. **Last action per seat.** `players[i].last_action` is `null` or `{kind, amount, all_in}` with `kind` in `small_blind`, `big_blind`, `fold`, `check`, `call`, `raise`. Drop the Chinese label.
-4. **Hand result.** Replace `summary` with `winners: [{seat, amount}]` (amounts are positive payoffs; an empty list means nobody won chips) and add `rebuys: [seat]` for seats topped up at the start of the current hand. History entries carry `winners` instead of `summary`.
+4. **Hand result.** Replace `summary` with `winners: [{seat, amount, name, name_en}]` (amounts are positive payoffs; an empty list means nobody won chips) and add `rebuys: [seat]` for seats topped up at the start of the current hand. Every winner entry in views, replay frames, history and hand replies carries the names that seat had when the hand ended. These historical names remain unchanged when a new occupant takes the seat at a later deal. History entries carry `winners` instead of `summary`.
 5. **Review notes.** `notes` becomes a list of objects:
    - `{"kind": "result", "actions": n, "net": units}`
    - `{"kind": "pot_odds", "street": s, "call": units, "eligible": units, "required": percent}` (`required` rounded to one decimal)

@@ -15,10 +15,13 @@ class LanguageDataTests(unittest.TestCase):
     def assert_language_neutral(self, value):
         if isinstance(value, dict):
             player = {"id", "name", "name_en", "kind"} <= value.keys()
+            winner = {"seat", "amount", "name", "name_en"} == value.keys()
             self.assertNotIn("summary", value)
             self.assertNotIn("text", value)
             for key, child in value.items():
                 if player and key in ("name", "name_en", "avatar"):
+                    continue
+                if winner and key in ("name", "name_en"):
                     continue
                 self.assert_language_neutral(child)
         elif isinstance(value, list):
@@ -76,10 +79,11 @@ class LanguageDataTests(unittest.TestCase):
                                             "street": "river", "all_in": True})
         self.assertEqual(table.view(0)["players"][1]["last_action"],
                          {"kind": "call", "amount": 198, "all_in": True})
-        self.assertEqual(table.view(0)["winners"], [{"seat": 1, "amount": 200}])
+        winners = [{"seat": 1, "amount": 200, "name": "阿岚", "name_en": "A-Lan"}]
+        self.assertEqual(table.view(0)["winners"], winners)
         for frame in table.hand(1, 0)["frames"]:
             if frame["complete"]:
-                self.assertEqual(frame["winners"], [{"seat": 1, "amount": 200}])
+                self.assertEqual(frame["winners"], winners)
 
     def test_results_rebuys_and_notes_have_the_same_shapes_in_history_and_replay(self):
         table = Table(seed=4, stacks=[0, 200, 1, 200, 200, 200])
@@ -87,7 +91,8 @@ class LanguageDataTests(unittest.TestCase):
         self.assertEqual(table.view(0)["winners"], [])
         finish(table)
         view, hand, history = table.view(0), table.hand(1, 0), table.history(0)[0]
-        expected = [{"seat": seat, "amount": table.state.payoffs[i]}
+        expected = [{"seat": seat, "amount": table.state.payoffs[i],
+                     "name": table.players[seat]["name"], "name_en": table.players[seat]["name_en"]}
                     for i, seat in enumerate(table.seats) if table.state.payoffs[i] > 0]
         for result in (view, hand, history):
             self.assertEqual(result["winners"], expected)
@@ -118,12 +123,49 @@ class LanguageDataTests(unittest.TestCase):
         saved = deepcopy(table.hands)
         for data in (table.view(0), table.history(0)[0], table.hand(1, 0)):
             data["winners"][0]["amount"] = 999
+            data["winners"][0]["name"] = "changed"
+            data["winners"][0]["name_en"] = "changed"
             data["rebuys"].clear()
         replay = table.hand(1, 0)
         replay["notes"][0]["net"] = 999
         replay["frames"][-1]["players"][0]["last_action"]["amount"] = 999
         replay["frames"][-1]["winners"].clear()
         self.assertEqual(table.hands, saved)
+
+    def test_winner_names_survive_bot_and_human_replacement(self):
+        table = Table(seed=1, shared=True, invite="example")
+        for seat in (2, 3, 4, 5):
+            table.act(seat, "fold")
+        while table.state.street_index != 3:
+            table.act(table.actor, "check_call")
+        table.act(0, "raise", 198)
+        table.act(1, "check_call")
+        bot_winners = deepcopy(table.view(0)["winners"])
+        self.assertEqual(bot_winners, [{"seat": 1, "amount": 200, "name": "阿岚", "name_en": "A-Lan"}])
+        seat = table.join("朋友")
+        self.assertEqual(seat, 1)
+        table.new_hand()
+        self.assertEqual(table.players[seat]["name"], "朋友")
+        self.assertEqual(table.history(0)[0]["winners"], bot_winners)
+        self.assertEqual(table.hand(1, 0)["winners"], bot_winners)
+        while table.actor != seat:
+            table.act(table.actor, "fold")
+        table.act(seat, "raise", 4)
+        table.act(table.actor, "fold")
+        self.assertFalse(table.state.status)
+        human_winners = deepcopy(table.view(0)["winners"])
+        self.assertEqual(human_winners[0]["name"], "朋友")
+        self.assertEqual(human_winners[0]["name_en"], "朋友")
+        table.leave(seat)
+        table.new_hand()
+        self.assertEqual(table.players[seat]["name_en"], "A-Lan")
+        self.assertEqual([h["winners"] for h in table.history(0)], [human_winners, bot_winners])
+        for hand_id, winners in ((1, bot_winners), (2, human_winners)):
+            hand = table.hand(hand_id, 0)
+            self.assertEqual(hand["winners"], winners)
+            for frame in hand["frames"]:
+                self.assertEqual(frame["winners"], winners if frame["complete"] else [])
+            self.assert_language_neutral(hand)
 
     def test_english_bot_names_and_guest_names_survive_ownership_changes(self):
         players = deepcopy(PLAYERS)
