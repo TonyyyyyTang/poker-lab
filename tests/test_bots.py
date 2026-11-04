@@ -11,7 +11,7 @@ def observation(**changes):
     value = {
         "seat": 2, "street": "preflop", "hole": ["7s", "6s"], "board": [],
         "pot": 3, "stack": 200, "bet": 0, "big_blind": 2, "position": "HJ",
-        "opponents": 5, "history": [], "reads": OpponentStats().snapshot(),
+        "opponents": 5, "history": [], "all_in": [], "reads": OpponentStats().snapshot(),
         "legal": {"can_fold": True, "can_check": False, "call_amount": 2,
                   "can_raise": True, "min_raise_to": 4, "max_raise_to": 200},
     }

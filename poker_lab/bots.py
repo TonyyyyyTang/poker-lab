@@ -198,17 +198,20 @@ def choose_action(observation: dict, archetype: str, rng: Random) -> dict:
     # A bluff needs everyone to fold; value bets need the stickiest opponent to call.
     folded = {e["player"] for e in observation["history"] if e["kind"] == "fold"}
     active = [seat for seat in observation["reads"] if seat != observation["seat"] and seat not in folded]
-    fold_rates = [_read(observation, seat, "fold_to_bet", profile) for seat in active]
-    fold_rate = min(fold_rates)
+    # All-in players cannot fold or call more; only the others respond to a bet.
+    can_fold = [seat for seat in active if seat not in observation["all_in"]]
     base = PRIORS["fold_to_bet"]
-    all_fold, base_all_fold = prod(fold_rates), prod(base for _ in active)
+    fold_rates = [_read(observation, seat, "fold_to_bet", profile) for seat in can_fold] or [base]
+    fold_rate = min(fold_rates)
+    all_fold, base_all_fold = prod(fold_rates), prod(base for _ in fold_rates)
     fold_odds = (all_fold / (1 - all_fold)) / (base_all_fold / (1 - base_all_fold))
     bluff_scale = min(2.5, max(0.4, fold_odds ** profile["adapt"]))
     # Fold equity beyond the bet's break-even price (risk s to win 1: s / (1 + s))
     # makes betting any two cards profitable, so bet much more often.
     breakeven = profile["size"] / (1 + profile["size"])
     excess = all_fold - max(breakeven, base_all_fold)
-    if any(_called_a_bet(observation, seat) for seat in active):
+    # No extra bluffing when the main pot must reach showdown, or into a player who has called.
+    if len(can_fold) < len(active) or any(_called_a_bet(observation, seat) for seat in active):
         excess, bluff_scale = 0.0, min(1.0, bluff_scale)
     fold_equity_bluff = profile["adapt"] * min(0.5, 2 * max(0.0, excess))
     size_scale = min(1.3, max(0.85, 1 + profile["adapt"] * 0.6 * (base - fold_rate)))

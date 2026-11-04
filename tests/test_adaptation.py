@@ -27,7 +27,7 @@ FOLDED = [act(seat, "fold", "preflop") for seat in (1, 3, 4, 5)]
 def flop_spot(r):
     """Seat 2 on the button with air, heads-up against seat 0, checked to."""
     return dict(seat=2, street="flop", hole=["2c", "7d"], board=["Ks", "Qh", "9s"], pot=12, stack=190, bet=0,
-                big_blind=2, position="BTN", opponents=1, history=FOLDED, reads=r,
+                big_blind=2, position="BTN", opponents=1, history=FOLDED, all_in=[], reads=r,
                 legal=dict(can_fold=False, can_check=True, call_amount=0, can_raise=True,
                            min_raise_to=2, max_raise_to=190))
 
@@ -36,7 +36,7 @@ def river_spot(r):
     """Seat 2 with second pair facing a pot-sized river bet from seat 0."""
     return dict(seat=2, street="river", hole=["Jc", "9d"], board=["Qs", "Jd", "5c", "4h", "2s"], pot=40, stack=150,
                 bet=0, big_blind=2, position="BTN", opponents=1, history=FOLDED + [act(0, "raise", "river")],
-                reads=r, legal=dict(can_fold=True, can_check=False, call_amount=40, can_raise=True,
+                all_in=[], reads=r, legal=dict(can_fold=True, can_check=False, call_amount=40, can_raise=True,
                                     min_raise_to=80, max_raise_to=150))
 
 
@@ -118,6 +118,18 @@ class AdaptationTests(unittest.TestCase):
         folder = actions(flop_spot(reads(fold_to_bet=[140, 200])), "tight")["raise"]
         self.assertLess(prior, 20)
         self.assertGreater(folder, 80)
+
+    def test_no_fold_equity_bonus_when_an_opponent_is_all_in(self):
+        # Three-way flop against two heavy folders. With seat 1 all-in the main pot must reach
+        # showdown, so the folding history earns no extra bluffs.
+        folders = reads(fold_to_bet=[190, 200])
+        folders[1]["fold_to_bet"] = [190, 200]
+        history = [act(s, "fold", "preflop") for s in (3, 4, 5)]
+        live = flop_spot(folders) | dict(history=history, opponents=2, all_in=[])
+        all_in = live | dict(all_in=[1])
+        baseline = flop_spot(reads()) | dict(history=history, opponents=2, all_in=[1])
+        self.assertGreater(actions(live, "tight")["raise"], 80)
+        self.assertLessEqual(actions(all_in, "tight")["raise"], actions(baseline, "tight")["raise"])
 
     def test_calling_style_adapts_least(self):
         def gain(style):

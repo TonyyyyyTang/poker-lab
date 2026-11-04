@@ -118,6 +118,7 @@ class Table:
                     opponents=sum(self.state.statuses) - 1,
                     eligible_pot_after_call=eligible,
                     legal=self.legal(), history=deepcopy(self.actions),
+                    all_in=[p for p in range(6) if self.state.stacks[self.indices[p]] == 0 and p not in self.folded],
                     reads=self.opponent_stats.snapshot())
 
     def snapshot(self):
