@@ -163,7 +163,7 @@ class ServerTests(unittest.TestCase):
         self.now += 0.001
         status, body, _ = self.request("GET", "/api/state")
         self.assertEqual(status, 401)
-        self.assertIn("重新连接", body["error"])
+        self.assertEqual(body["code"], "expired")
         self.assertNotIn("test-session", server.SESSIONS)
 
     def test_state_history_and_replay_reads_refresh_idle_time_and_lru(self):
@@ -193,7 +193,7 @@ class ServerTests(unittest.TestCase):
         for method, path in (("GET", "/api/state"), ("POST", "/api/action")):
             status, body, headers = self.request(method, path, {"version": previous.version})
             self.assertEqual(status, 401)
-            self.assertIn("重新连接", body["error"])
+            self.assertEqual(body["code"], "expired")
             self.assertNotIn("Set-Cookie", headers)
         status, state, headers = self.request("POST", "/api/session")
         self.assertEqual(status, 200)
@@ -251,7 +251,7 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertEqual(set(body), {
                 "you", "hand_id", "version", "complete", "street", "board", "pot", "current_actor",
-                "dealer", "big_blind", "players", "legal", "actions", "summary", "session_net",
+                "dealer", "big_blind", "players", "legal", "actions", "winners", "rebuys", "session_net",
                 "table", "pending", "turn_remaining", "next_hand_in"})
             self.assertEqual(body["you"], seat)
             self.assertEqual(body["players"][seat]["cards"], table.holes[seat])
@@ -268,7 +268,7 @@ class ServerTests(unittest.TestCase):
         for sid, seat in (("guest", 2), ("test-session", 0)):
             status, replay, _ = self.request("GET", "/api/hand/1", sid=sid)
             self.assertEqual(status, 200)
-            self.assertEqual(set(replay), {"hand_id", "frames", "summary", "notes", "net", "board"})
+            self.assertEqual(set(replay), {"hand_id", "frames", "winners", "rebuys", "notes", "net", "board"})
             self.assertEqual(replay, table.hand(1, seat))
             self.assertEqual(self.request("GET", "/api/history", sid=sid)[1], {"hands": table.history(seat)})
         status, body, _ = self.request("POST", "/api/next", {"version": table.version}, sid="guest")

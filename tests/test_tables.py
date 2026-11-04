@@ -57,10 +57,11 @@ class ViewerTests(unittest.TestCase):
             self.assertTrue(all(not player["cards"] for player in frame["players"]))
         for viewer in (0, 3):
             replay = table.hand(1, viewer)
-            self.assertEqual(set(replay), {"hand_id", "summary", "net", "board", "frames", "notes"})
+            self.assertEqual(set(replay), {"hand_id", "winners", "rebuys", "net", "board", "frames", "notes"})
             self.assertEqual(replay["net"], table.session_net[viewer])
             self.assertEqual(replay["net"], table.history(viewer)[0]["net"])
-            self.assertIn(f"净变化 {replay['net'] / 2:g} BB", replay["notes"][0])
+            self.assertEqual(replay["notes"][0]["kind"], "result")
+            self.assertEqual(replay["notes"][0]["net"], replay["net"])
             self.assertEqual(replay["frames"][-1]["session_net"], table.session_net[viewer])
             for frame in replay["frames"]:
                 self.assertEqual(frame["you"], viewer)

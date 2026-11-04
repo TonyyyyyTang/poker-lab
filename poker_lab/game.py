@@ -9,6 +9,7 @@ import time
 
 from pokerkit import Automation as A, Deck, Mode, NoLimitTexasHoldem
 
+from .errors import GameError
 from .opponents import OpponentStats
 
 ENGINE_VERSION = "pokerkit-0.7.4/adapter-1"
@@ -17,12 +18,12 @@ BOT_DELAY = 0.85
 FAST_BOT_DELAY = 0.2
 AUTO_DEAL_SECONDS = 5
 PLAYERS = [
-    dict(kind="human", name="你", style="", avatar="你", color="#b7874c"),
-    dict(kind="bot", name="阿岚", style="tight", avatar="岚", color="#78988c"),
-    dict(kind="bot", name="小满", style="calling", avatar="满", color="#cf9e77"),
-    dict(kind="bot", name="Leo", style="bold", avatar="L", color="#8a8bb1"),
-    dict(kind="bot", name="知夏", style="tight", avatar="夏", color="#b3949e"),
-    dict(kind="bot", name="老周", style="calling", avatar="周", color="#8199ab"),
+    dict(kind="human", name="你", name_en="You", style="", avatar="你", color="#b7874c"),
+    dict(kind="bot", name="阿岚", name_en="A-Lan", style="tight", avatar="岚", color="#78988c"),
+    dict(kind="bot", name="小满", name_en="Xiaoman", style="calling", avatar="满", color="#cf9e77"),
+    dict(kind="bot", name="Leo", name_en="Leo", style="bold", avatar="L", color="#8a8bb1"),
+    dict(kind="bot", name="知夏", name_en="Zhixia", style="tight", avatar="夏", color="#b3949e"),
+    dict(kind="bot", name="老周", name_en="Lao Zhou", style="calling", avatar="周", color="#8199ab"),
 ]
 AUTOMATIONS = (A.ANTE_POSTING, A.BET_COLLECTION, A.BLIND_OR_STRADDLE_POSTING,
                A.RUNOUT_COUNT_SELECTION, A.HOLE_CARDS_SHOWING_OR_MUCKING,
@@ -33,10 +34,6 @@ POSITIONS = ["SB", "BB", "UTG", "HJ", "CO", "BTN"]
 
 def derived_seed(seed, label):
     return int.from_bytes(hashlib.sha256(f"{seed}:{label}".encode()).digest(), "big")
-
-
-def bb(amount):
-    return f"{amount / 2:g} BB"
 
 
 class Table:
@@ -57,25 +54,27 @@ class Table:
         self.players = deepcopy(PLAYERS)
         if players is not None:
             if len(players) != 6:
-                raise ValueError("牌桌需要六个座位。")
+                raise ValueError("A table must have six seats.")
             for default, configured in zip(self.players, players):
                 default.update(configured)
         for player in self.players:
             if player["kind"] not in ("human", "bot") or not isinstance(player["name"], str):
-                raise ValueError("座位配置错误。")
+                raise ValueError("Invalid seat configuration.")
             if player["kind"] == "human":
                 player["style"] = ""
+                if players is not None:
+                    player["name_en"] = player["name"]
             elif player["style"] not in ("tight", "calling", "bold"):
-                raise ValueError("未知的对手风格。")
+                raise ValueError("Unknown bot style.")
             player.update(away=False, leaving=False)
         # Seat zero starts human, so it needs a regular of its own when vacated.
         self.bots = deepcopy(PLAYERS)
-        self.bots[0].update(kind="bot", name="阿禾", style="tight", avatar="禾")
+        self.bots[0].update(kind="bot", name="阿禾", name_en="A-He", style="tight", avatar="禾")
         for seat, player in enumerate(self.players):
             if player["kind"] == "bot":
                 self.bots[seat] = deepcopy(player)
         if turn_seconds is not None and turn_seconds <= 0:
-            raise ValueError("行动时间必须大于零。")
+            raise ValueError("Turn duration must be positive.")
         self.turn_seconds = 30 if shared else turn_seconds
         self.seed = secrets.randbits(128) if seed is None else seed
         self.stacks = list(stacks or [200] * 6)
@@ -106,11 +105,11 @@ class Table:
         """Reserve a bot seat; its current hand still belongs to the bot."""
         with self.changed:
             if self.closed or not self.shared:
-                raise ValueError("牌桌已关闭。")
+                raise GameError("expired")
             seat = next((seat for seat, player in enumerate(self.players)
                          if player["kind"] == "bot" and seat not in self.pending), None)
             if seat is None:
-                raise ValueError("这张桌已经坐满了。")
+                raise GameError("table_full")
             names = {p["name"] for p in self.players if p["kind"] == "human"}
             names.update(p["name"] for p in self.pending.values())
             base, suffix = name, 2
@@ -118,7 +117,7 @@ class Table:
                 name = f"{base} {suffix}"
                 suffix += 1
             player = deepcopy(self.players[seat])
-            player.update(kind="human", name=name, style="", avatar=name[0], away=False, leaving=False)
+            player.update(kind="human", name=name, name_en=name, style="", avatar=name[0], away=False, leaving=False)
             self.pending[seat] = player
             self.version += 1
             if self.due_at is None:
@@ -143,8 +142,10 @@ class Table:
 
     def back(self, seat):
         with self.changed:
-            if self.closed or seat in self.pending or not self.has_human(seat):
-                raise ValueError("此座位尚未入座或已经离开。")
+            if self.closed:
+                raise GameError("expired")
+            if seat in self.pending or not self.has_human(seat):
+                raise GameError("not_seated")
             was_away = self.players[seat]["away"]
             self.players[seat]["away"] = False
             self.timeouts[seat] = 0
@@ -174,19 +175,19 @@ class Table:
     def new_hand(self):
         with self.changed:
             if self.closed:
-                raise ValueError("牌桌已关闭。")
+                raise GameError("expired")
             self._new_hand()
             self._schedule_next()
 
     def _new_hand(self):
         if self.hand_id and self.state.status:
-            raise ValueError("这手牌还没结束。")
+            raise GameError("hand_in_progress")
         self._change_occupants()
-        rebuys = []
+        self.rebuys = []
         for seat, amount in enumerate(self.stacks):
             if amount < 2:
                 self.stacks[seat] = 200
-                rebuys.append(self.players[seat]["name"])
+                self.rebuys.append(seat)
         self.hand_id += 1
         self.version += 1
         self._decision_version = self.version
@@ -210,10 +211,10 @@ class Table:
         self.shown = {}
         self.actions = []
         self.frames = []
-        self.last_actions = {seat: "" for seat in range(6)}
-        self.last_actions[self.seats[0]] = "小盲 " + bb(1)
-        self.last_actions[self.seats[1]] = "大盲 " + bb(2)
-        self.summary = "、".join(rebuys) + " 已补充至 100 BB。" if rebuys else ""
+        self.last_actions = {seat: None for seat in range(6)}
+        for index, kind in enumerate(("small_blind", "big_blind")):
+            self.last_actions[self.seats[index]] = dict(
+                kind=kind, amount=self.state.bets[index], all_in=self.state.stacks[index] == 0)
         self.action_trace = []
         self._saved = False
         self._record()
@@ -271,7 +272,7 @@ class Table:
             players.append(dict(id=seat, **player, stack=s.stacks[i], bet=s.bets[i],
                                 in_hand=seat not in self.folded,
                                 all_in=s.stacks[i] == 0 and seat not in self.folded,
-                                cards=cards.copy(), last_action=self.last_actions[seat],
+                                cards=cards.copy(), last_action=deepcopy(self.last_actions[seat]),
                                 position=POSITIONS[i],
                                 net=s.payoffs[i] if complete else 0))
         pot = s.total_pot_amount
@@ -281,8 +282,16 @@ class Table:
                     street="showdown" if complete else STREETS[s.street_index or 0],
                     board=self._board(), pot=pot, current_actor=self.actor,
                     dealer=self.dealer, big_blind=2, players=players,
-                    legal=self.legal(), actions=deepcopy(self.actions), summary=self.summary,
+                    legal=self.legal(), actions=deepcopy(self.actions),
+                    winners=self._winners(), rebuys=self.rebuys.copy(),
                     session_net=self.session_net.copy())
+
+    def _winners(self):
+        if self.state.status:
+            return []
+        return [dict(seat=seat, amount=self.state.payoffs[i],
+                     name=self.players[seat]["name"], name_en=self.players[seat]["name_en"])
+                for i, seat in enumerate(self.seats) if self.state.payoffs[i] > 0]
 
     @staticmethod
     def _project(frame, seat, hole, pending=False):
@@ -311,8 +320,9 @@ class Table:
         with self.lock:
             if seat in self.pending:
                 return []
-            return [dict(hand_id=h["hand_id"], summary=h["summary"], net=h["nets"][seat],
-                         board=h["board"].copy()) for h in reversed(self.hands)
+            return [dict(hand_id=h["hand_id"], winners=deepcopy(h["winners"]),
+                         rebuys=h["rebuys"].copy(), net=h["nets"][seat], board=h["board"].copy())
+                    for h in reversed(self.hands)
                     if h["hand_id"] >= self.first_hand[seat]]
 
     def hand(self, hand_id, seat):
@@ -322,7 +332,8 @@ class Table:
             hand = next((h for h in self.hands if h["hand_id"] == hand_id), None)
             if hand is None:
                 return None
-            return dict(hand_id=hand_id, summary=hand["summary"], net=hand["nets"][seat],
+            return dict(hand_id=hand_id, winners=deepcopy(hand["winners"]),
+                        rebuys=hand["rebuys"].copy(), net=hand["nets"][seat],
                         board=hand["board"].copy(), notes=self._review_notes(hand, seat),
                         frames=[self._project(f, seat, hand["holes"][seat]) for f in hand["frames"]])
 
@@ -332,7 +343,7 @@ class Table:
     def act(self, seat, action, amount=None, version=None):
         with self.changed:
             if self.closed:
-                raise ValueError("牌桌已关闭。")
+                raise GameError("expired")
             self._act(seat, action, amount, version)
             self._schedule_next()
             return self.view(seat)
@@ -340,43 +351,46 @@ class Table:
     def _act(self, seat, action, amount=None, version=None, automatic=False):
         # Seat metadata can change while the same decision remains on screen.
         # Any version from this decision is valid; prior/future decisions are not.
-        if version is not None and (type(version) is not int
-                                    or not self._decision_version <= version <= self.version):
-            raise ValueError("牌局已更新，请按当前局面操作。")
+        if version is not None:
+            if type(version) is not int or version < 0:
+                raise GameError("bad_request")
+            if not self._decision_version <= version <= self.version:
+                raise GameError("stale")
         if not self.state.status or seat != self.actor:
-            raise ValueError("现在还没轮到这个座位。")
+            raise GameError("not_your_turn")
         s = self.state
         street = STREETS[s.street_index or 0]
         old_count = len(s.operations)
         old_bet = s.bets[self.indices[seat]]
+        old_stack = s.stacks[self.indices[seat]]
         if action == "fold":
             if not self.legal()["can_fold"]:
-                raise ValueError("当前不能弃牌。")
+                raise GameError("illegal_action")
             s.fold()
             self.folded.add(seat)
-            label, contribution = "弃牌", 0
+            kind, contribution = "fold", 0
         elif action == "check_call":
             contribution = s.checking_or_calling_amount or 0
             if not s.can_check_or_call():
-                raise ValueError("当前不能过牌或跟注。")
+                raise GameError("illegal_action")
             s.check_or_call()
-            label = "过牌" if contribution == 0 else "跟注 " + bb(contribution)
+            kind = "check" if contribution == 0 else "call"
         elif action == "raise":
             if type(amount) is not int or not s.can_complete_bet_or_raise_to(amount):
-                raise ValueError("下注额不在当前允许范围内。")
+                raise GameError("illegal_action")
             s.complete_bet_or_raise_to(amount)
             contribution = amount - old_bet
-            label = "加注至 " + bb(amount)
+            kind = "raise"
         else:
-            raise ValueError("未知操作。")
+            raise GameError("illegal_action")
         if not automatic and self.players[seat]["kind"] == "human" and not self.players[seat]["leaving"]:
             self.players[seat]["away"] = False
             self.timeouts[seat] = 0
-        if s.stacks[self.indices[seat]] == 0 and seat not in self.folded:
-            label += " · 全下"
-        self.last_actions[seat] = label
-        self.actions.append(dict(player=seat, kind=action, amount=amount or contribution,
-                                 street=street, text=f"{self.players[seat]['name']} · {label}"))
+        all_in = action != "fold" and contribution == old_stack
+        action_amount = amount if action == "raise" else contribution
+        self.last_actions[seat] = dict(kind=kind, amount=action_amount, all_in=all_in)
+        self.actions.append(dict(player=seat, kind=action, amount=action_amount,
+                                 street=street, all_in=all_in))
         self.action_trace.append(dict(seat=seat, action=action, amount=amount))
         self.version += 1
         self._decision_version = self.version
@@ -406,13 +420,11 @@ class Table:
             self.stacks = [s.stacks[self.indices[seat]] for seat in range(6)]
             for seat in range(6):
                 self.session_net[seat] += s.payoffs[self.indices[seat]]
-            winners = [f"{self.players[seat]['name']} +{bb(s.payoffs[i])}"
-                       for i, seat in enumerate(self.seats) if s.payoffs[i] > 0]
-            self.summary = "，".join(winners) or "平分底池"
             self.opponent_stats.update(self._public_record())
             self._record()
             self.hands.append(dict(hand_id=self.hand_id, frames=deepcopy(self.frames),
-                                   summary=self.summary, start_stacks=self.start_stacks.copy(),
+                                   winners=self._winners(), rebuys=self.rebuys.copy(),
+                                   start_stacks=self.start_stacks.copy(),
                                    holes=deepcopy(self.holes),
                                    nets=[s.payoffs[self.indices[p]] for p in range(6)], board=self._board()))
             self.hands = self.hands[-HAND_HISTORY_LIMIT:]
@@ -426,7 +438,7 @@ class Table:
 
     def _review_notes(self, hand, seat):
         hero = [a for a in hand["frames"][-1]["actions"] if a["player"] == seat]
-        notes = [f"本手你行动 {len(hero)} 次，净变化 {bb(hand['nets'][seat])}。结果本身不代表决策质量。"]
+        notes = [dict(kind="result", actions=len(hero), net=hand["nets"][seat])]
         for frame in hand["frames"]:
             if frame["current_actor"] == seat and frame["legal"]["call_amount"] > 0:
                 cost = frame["legal"]["call_amount"]
@@ -435,9 +447,10 @@ class Table:
                 eligible = sum(min(cap, committed + (cost if p == seat else 0))
                                for p, committed in enumerate(contributions))
                 required = cost / eligible * 100
-                notes.append(f"{dict(preflop='翻牌前', flop='翻牌', turn='转牌', river='河牌').get(frame['street'], '')}的一次决定：跟注 {bb(cost)}，跟注后可争夺底池 {bb(eligible)}；若之后不再下注，需要约 {required:.1f}% 的胜率才能打平。这不是完整行动 EV。")
+                notes.append(dict(kind="pot_odds", street=frame["street"], call=cost,
+                                  eligible=eligible, required=round(required, 1)))
                 break
-        notes.append("逐步回看只显示当时可见的信息；对手在实际亮牌后才公开底牌，弃牌与盖牌仍然保密。")
+        notes.append(dict(kind="visibility"))
         return notes
 
     def _schedule_next(self):
