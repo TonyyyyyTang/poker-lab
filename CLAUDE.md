@@ -12,7 +12,7 @@ Play money only.
 
 ## Structure
 - `poker_lab/game.py` — `Table`: PokerKit 0.7.4 adapter. Dealing (seeded per hand),
-  legal actions, settlement, seat observations, replay frames, last 100 hands.
+  legal actions, settlement, seat observations, replay frames, last 20 hands.
   Integer chips, 2 units = 1 BB. Seat 0 is the human.
 - `poker_lab/bots.py` — `choose_action(observation, style, rng)`; profiles `tight`,
   `calling`, `bold`. Preflop strength score vs position/price threshold; postflop
@@ -20,15 +20,16 @@ Play money only.
   opponent reads.
 - `poker_lab/opponents.py` — per-table public opponent statistics with Beta priors;
   updated from each completed hand's public record, passed to bots as `reads`.
-- `poker_lab/server.py` — stdlib HTTP on 127.0.0.1:8765, in-memory cookie sessions,
-  JSON API under `/api/`.
+- `poker_lab/server.py` — stdlib HTTP; `HOST`/`PORT` from the environment (127.0.0.1:8765
+  locally); in-memory cookie sessions (at most 100, 2 h idle expiry); JSON API under `/api/`.
 - `web/` — buildless HTML/CSS/JS; the client advances bot turns via `/api/step`.
 - `tests/` — unittest: engine edge cases, observation isolation, determinism,
   policy differences, server versioning.
 
 ## Status (4 Nov 2026)
 Working: full hand loop, five bots on three profiles that adapt to public opponent
-statistics, time-correct replay, 24 tests.
+statistics, time-correct replay, 38 tests. Live at https://poker-lab.onrender.com (Render free tier,
+redeploys on push to `main`).
 Known gaps: bot equity is vs random hands (noisy, range-blind); bot reasons and
 policy/engine versions are discarded; per-hand action traces are not stored;
 review gives one pot-odds note per hand; replay repeats the final step;

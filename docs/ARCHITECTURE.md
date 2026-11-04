@@ -1,6 +1,6 @@
 # Architecture
 
-Status: local implementation with public solo hosting configuration prepared, 4 November 2026. The design below includes later extensions, identified as proposals.
+Status: public solo table live on Render's free tier, with adaptive bots, 4 November 2026. The design below includes later extensions, identified as proposals.
 
 ## Implemented slice
 
@@ -11,7 +11,7 @@ Status: local implementation with public solo hosting configuration prepared, 4 
 - `web/`: native HTML, CSS and JavaScript for the six-seat table, actions and post-hand replay. No frontend toolchain is required.
 - `tests/`: adapter boundary tests and conditional policy comparisons.
 
-Sessions and each session's last 20 completed hands are held in process memory. The server keeps at most 100 sessions, evicting the least recently used when full. Sessions idle for more than two hours are removed on API requests or health checks. Reloading a page resumes via its cookie; restarting the service clears them. No database is used. Render's free-service configuration is prepared but has not been deployed. Replay is visual history, not a branchable simulator yet. A deterministic seed and action trace exist inside each Table for verification, but are not sent through the public API.
+Sessions and each session's last 20 completed hands are held in process memory. The server keeps at most 100 sessions, evicting the least recently used when full. Sessions idle for more than two hours are removed on API requests or health checks. Reloading a page resumes via its cookie; restarting the service clears them. No database is used. The solo table is deployed on Render's free tier at https://poker-lab.onrender.com. Replay is visual history, not a branchable simulator yet. A deterministic seed and action trace exist inside each Table for verification, but are not sent through the public API.
 
 PokerKit is MIT licensed and was selected after checking its documented full betting/settlement model. Its API is pinned and tested at 0.7.4. Each browser session is a solo table; multiplayer is a later phase.
 

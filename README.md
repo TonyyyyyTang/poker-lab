@@ -4,6 +4,8 @@ A quiet, friendly six-seat hold'em table with opponents whose habits affect how 
 
 The first local playable version uses 100 BB starting stacks, 0.5/1 BB blinds, no rake, five fictional opponents, and post-hand replay. Stakes are simulated. PokerKit 0.7.4 handles legal actions and settlement; a small Python server serves the table. No API keys, model calls, Node installation or frontend build are needed.
 
+**Play:** <https://poker-lab.onrender.com>. It runs on a free server: after 15 idle minutes the first visit takes about a minute to wake.
+
 ![Poker Lab table](outputs/poker-lab-preview.jpg)
 
 ## Play locally
@@ -40,7 +42,7 @@ The latest 20 completed hands are available in each session. Refreshing the brow
 
 ## Public solo hosting
 
-`render.yaml` configures a free Render service using Python 3.13.2. There is no public URL yet; see the [owner deployment checklist](docs/tasks/public-solo-table.md#owner-steps).
+`render.yaml` configures a free Render service using Python 3.13.2. It is live at <https://poker-lab.onrender.com> and redeploys when `main` is pushed.
 
 Each browser gets its own solo table. Render's free service sleeps after 15 minutes without incoming traffic and takes about a minute to wake. Sleep or redeployment resets in-memory tables and history. An open page reports the lost session on its next request; choose **重新连接** to start a fresh table. See [Render's free-service behaviour](https://render.com/docs/free#spinning-down-on-idle).
 
@@ -61,4 +63,4 @@ Tests cover the adapter's legal-action boundaries, short all-ins, side pots, rep
 - [Working with Codex and Claude Code](docs/COLLABORATION.md)
 - [PokerKit](https://github.com/uoftcprg/pokerkit), MIT-licensed rules engine ([documentation](https://pokerkit.readthedocs.io/en/stable/))
 
-Private owner context stays in `.private/` and is excluded from Git and the server's static file allowlist. The project currently runs locally and has no public deployment.
+Private owner context stays in `.private/` and is excluded from Git and the server's static file allowlist.
