@@ -9,6 +9,7 @@ Goal: a website where anyone can play the bots from a link, friends can share a 
 - Hosting: free tier for now (Render's free web service is the current candidate; it sleeps after 15 idle minutes and restarts in about a minute).
 - No accounts. A guest name and an invite link are enough.
 - Play money only. Private invite tables and solo play against bots; no public lobby.
+- Live updates use long polling, not WebSockets: at most six players and about one change per second per table, so a second transport would add a dependency without a visible gain.
 - In-memory state is acceptable until persistence is needed. A sleep or redeploy may end a table; the UI says so plainly.
 
 ## Phases
@@ -16,8 +17,8 @@ Goal: a website where anyone can play the bots from a link, friends can share a 
 | Phase | Outcome | Owner | Status |
 |---|---|---|---|
 | 0. Public solo table | The current game at a public HTTPS link | Codex | Live at https://poker-lab.onrender.com |
-| 1. Server-driven tables | The server runs bot turns and timers; each seat gets its own view; one table can seat several humans | Codex (backend), Claude (client) | Backend in review: `codex/server-driven-tables`; client: `claude/live-client` |
-| 2. Invite rooms | "Create table" returns a link; friends join with a name; empty seats are bots; live updates over WebSocket; turn timer, sit out, rejoin | Codex (backend), Claude (lobby and seat UI) | Not started |
+| 1. Server-driven tables | The server runs bot turns and timers; each seat gets its own view; one table can seat several humans | Codex (backend), Claude (client) | Live |
+| 2. Invite rooms | "Create table" returns a link; friends join with a name; empty seats are bots; live updates by long polling; turn timer, away, leave and rejoin | Codex (backend), Claude (join and seat UI) | Spec: `docs/tasks/invite-tables.md` |
 | 3. Adaptive bots | Bots keep per-opponent statistics from public observations, with Bayesian shrinkage, and shift bluffing, value sizing and calling thresholds; personality sets how fast they adapt | Claude | Done; see `poker_lab/opponents.py` |
 | 4. Decision review | Replay shows equity against an estimated range with its standard error, breakeven equity, call/fold EV under a stated simplification, and all-in-adjusted results | Claude | Not started |
 
