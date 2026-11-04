@@ -10,6 +10,7 @@ adjustment is exactly zero, so a fresh table plays like friends-1.0.
 """
 
 from collections import Counter
+from math import prod
 from random import Random
 
 from pokerkit import StandardHighHand
@@ -111,6 +112,17 @@ def _last_raiser(observation: dict) -> int | None:
     return raisers[-1] if raisers else None
 
 
+def _called_a_bet(observation: dict, seat: int) -> bool:
+    """Whether `seat` already called a postflop bet this hand: its range is no longer a folding one."""
+    raised = set()
+    for e in observation["history"]:
+        if e["street"] != "preflop" and e["player"] == seat and e["kind"] == "check_call" and e["street"] in raised:
+            return True
+        if e["kind"] == "raise":
+            raised.add(e["street"])
+    return False
+
+
 def _raise(observation: dict, profile: dict, rng: Random, reason: str, size_scale: float) -> dict:
     legal = observation["legal"]
     current = observation["bet"] + legal["call_amount"]
@@ -183,20 +195,32 @@ def choose_action(observation: dict, archetype: str, rng: Random) -> dict:
     if not free and legal["can_fold"] and perceived < required:
         return {"action": "fold", "reason": "继续投入的价格超过了对这手牌的判断"}
 
-    # The stickiest opponent still in the hand decides how bets are received.
+    # A bluff needs everyone to fold; value bets need the stickiest opponent to call.
     folded = {e["player"] for e in observation["history"] if e["kind"] == "fold"}
     active = [seat for seat in observation["reads"] if seat != observation["seat"] and seat not in folded]
-    fold_rate = min(_read(observation, seat, "fold_to_bet", profile) for seat in active)
+    # All-in players cannot fold or call more; only the others respond to a bet.
+    can_fold = [seat for seat in active if seat not in observation["all_in"]]
     base = PRIORS["fold_to_bet"]
-    fold_odds = (fold_rate / (1 - fold_rate)) / (base / (1 - base))
+    fold_rates = [_read(observation, seat, "fold_to_bet", profile) for seat in can_fold] or [base]
+    fold_rate = min(fold_rates)
+    all_fold, base_all_fold = prod(fold_rates), prod(base for _ in fold_rates)
+    fold_odds = (all_fold / (1 - all_fold)) / (base_all_fold / (1 - base_all_fold))
     bluff_scale = min(2.5, max(0.4, fold_odds ** profile["adapt"]))
+    # Fold equity beyond the bet's break-even price (risk s to win 1: s / (1 + s))
+    # makes betting any two cards profitable, so bet much more often.
+    breakeven = profile["size"] / (1 + profile["size"])
+    excess = all_fold - max(breakeven, base_all_fold)
+    # No extra bluffing when the main pot must reach showdown, or into a player who has called.
+    if len(can_fold) < len(active) or any(_called_a_bet(observation, seat) for seat in active):
+        excess, bluff_scale = 0.0, min(1.0, bluff_scale)
+    fold_equity_bluff = profile["adapt"] * min(0.5, 2 * max(0.0, excess))
     size_scale = min(1.3, max(0.85, 1 + profile["adapt"] * 0.6 * (base - fold_rate)))
 
     multiway = max(1, observation["opponents"])
     value_threshold = max(0.48, 1 / (multiway + 1) + 0.15) + _clamp(profile["adapt"] * 0.3 * (fold_rate - base), 0.06)
     value_raise = perceived > value_threshold and rng.random() < profile["value_raise"]
     # Bluff more often with a draw, in position, and against fewer players.
-    bluff_rate = profile["bluff"] * (1.5 if draw else 0.45) * (1.2 if late else 0.8) / multiway * bluff_scale
+    bluff_rate = profile["bluff"] * (1.5 if draw else 0.45) * (1.2 if late else 0.8) / multiway * bluff_scale + fold_equity_bluff
     bluff_raise = (free or call <= observation["pot"] / 3) and rng.random() < bluff_rate
     if can_raise and (value_raise or bluff_raise):
         return _raise(observation, profile, rng, "借听牌向对手施压" if bluff_raise and draw else "下注争取价值或主动权", size_scale)
