@@ -1,0 +1,24 @@
+.private/
+.env
+.env.*
+!.env.example
+__pycache__/
+.pytest_cache/
+.venv/
+node_modules/
+dist/
+.DS_Store
+
+work/
+
+*.pyc
+
+# Local coding-agent state and isolated checkouts
+.claude/worktrees/
+.claude/settings.local.json
+.worktrees/
+CLAUDE.local.md
+
+# Publish the README preview; keep other generated outputs local
+outputs/*
+!outputs/poker-lab-preview.jpg
